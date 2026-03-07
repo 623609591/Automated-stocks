@@ -4,9 +4,9 @@ import './Card.css'
 export default function HoldingsTable({ data }) {
   if (!data || !data.length) {
     return (
-      <div className="card">
+      <div className="card card-wide">
         <h3 className="card-title">当前持仓</h3>
-        <p className="text-muted">暂无持仓</p>
+        <p className="text-muted holdings-empty">暂无持仓</p>
       </div>
     )
   }

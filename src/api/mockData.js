@@ -20,7 +20,7 @@ export const getAccountOverview = () => ({
 })
 
 export const getMarketEnv = () => ({
-  signal: 'GREEN', // RED | YELLOW | GREEN
+  signal: 'GREEN', // RED | YELLOW | STRONG_YELLOW | GREEN | STRONG_GREEN | SUPER_GREEN（与 QMT.py 一致）
   shIndex: 3245.67,
   shMa20: 3210.22,
   shTodayReturn: 0.85,
@@ -28,20 +28,28 @@ export const getMarketEnv = () => ({
 })
 
 export const getStrategyParams = () => ({
-  maxPositionGreen: 0.6,
-  maxPositionYellow: 0.4,
+  maxPositionGreen: 0.70,
+  maxPositionYellow: 0.50,
   maxStocks: 3,
   minBuyVolume: 100,
-  maxDailyLossRatio: 0.02,
+  maxDailyLossRatio: 0.015,
   buyTime: '14:50',
   sellStart: '09:30',
-  sellEnd: '09:59',
+  sellEnd: '10:30',
   takeProfit: 3.0,
   stopLoss: -1.5,
   minPrice: 8,
   maxPrice: 40,
-  minRise: 1.5,
-  maxRise: 4.5,
+  minRise: 2.0,
+  maxRise: 4.0,
+  positionTiers: [
+    { signal: 'SUPER_GREEN', label: '超强绿灯', position: 0.85, maxStocks: 4 },
+    { signal: 'STRONG_GREEN', label: '强绿灯', position: 0.75, maxStocks: 4 },
+    { signal: 'GREEN', label: '普通绿灯', position: 0.70, maxStocks: 3 },
+    { signal: 'STRONG_YELLOW', label: '强黄灯', position: 0.60, maxStocks: 3 },
+    { signal: 'YELLOW', label: '普通黄灯', position: 0.50, maxStocks: 2 },
+    { signal: 'RED', label: '红灯', position: 0.00, maxStocks: 0 },
+  ],
 })
 
 export const getHoldings = () => [

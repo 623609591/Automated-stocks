@@ -19,12 +19,12 @@ export default function ConnectionStatus({ data }) {
         <span>{accountId}</span>
       </div>
       <div className="status-row">
-        <span className="label">MiniQMT</span>
-        <span className="text-muted">{qmtHost}</span>
+        <span className="label">交易端</span>
+        <span className="text-muted">{qmtHost ?? '-'}</span>
       </div>
       <div className="status-row">
         <span className="label">最后心跳</span>
-        <span className="text-muted">{dayjs(lastHeartbeat).format('HH:mm:ss')}</span>
+        <span className="text-muted">{lastHeartbeat ? dayjs(lastHeartbeat).format('HH:mm:ss') : '-'}</span>
       </div>
     </div>
   )

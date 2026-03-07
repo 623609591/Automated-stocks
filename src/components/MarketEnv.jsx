@@ -1,10 +1,14 @@
 import React from 'react'
 import './Card.css'
 
+// 与 QMT.py 大盘环境 6 档信号一致
 const SIGNAL_MAP = {
   RED: { label: '红灯', desc: '空仓不买', color: 'var(--red)', icon: '🔴' },
-  YELLOW: { label: '黄灯', desc: '40% 仓位', color: 'var(--yellow)', icon: '🟡' },
-  GREEN: { label: '绿灯', desc: '60% 仓位', color: 'var(--green)', icon: '🟢' },
+  YELLOW: { label: '普通黄灯', desc: '50% 仓位', color: 'var(--yellow)', icon: '🟡' },
+  STRONG_YELLOW: { label: '强黄灯', desc: '60% 仓位', color: 'var(--yellow)', icon: '🟡' },
+  GREEN: { label: '普通绿灯', desc: '70% 仓位', color: 'var(--green)', icon: '🟢' },
+  STRONG_GREEN: { label: '强绿灯', desc: '75% 仓位', color: 'var(--green)', icon: '🟢' },
+  SUPER_GREEN: { label: '超强绿灯', desc: '85% 仓位', color: 'var(--green)', icon: '🟢' },
 }
 
 export default function MarketEnv({ data }) {
@@ -24,21 +28,21 @@ export default function MarketEnv({ data }) {
       <div className="env-stats">
         <div className="env-row">
           <span className="label">指数收盘</span>
-          <span>{shIndex != null ? shIndex.toFixed(2) : '-'}</span>
+          <span>{shIndex != null && shIndex !== 0 ? shIndex.toFixed(2) : '-'}</span>
         </div>
         <div className="env-row">
           <span className="label">MA20</span>
-          <span>{shMa20 != null ? shMa20.toFixed(2) : '-'}</span>
+          <span>{shMa20 != null && shMa20 !== 0 ? shMa20.toFixed(2) : '-'}</span>
         </div>
         <div className="env-row">
           <span className="label">今日涨跌幅</span>
-          <span className={shTodayReturn >= 0 ? 'text-green' : 'text-red'}>
+          <span className={shTodayReturn != null ? (shTodayReturn >= 0 ? 'text-green' : 'text-red') : ''}>
             {shTodayReturn != null ? `${shTodayReturn >= 0 ? '+' : ''}${shTodayReturn.toFixed(2)}%` : '-'}
           </span>
         </div>
         <div className="env-row">
           <span className="label">近10日下跌天数</span>
-          <span>{dropDaysIn10 ?? '-'}</span>
+          <span>{dropDaysIn10 != null ? dropDaysIn10 : '-'}</span>
         </div>
       </div>
     </div>

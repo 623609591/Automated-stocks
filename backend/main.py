@@ -15,6 +15,7 @@ from strategy import (
     get_next_schedule,
     get_candidates,
     get_equity_curve,
+    get_state_meta,
 )
 
 app = FastAPI(title="Automated-stocks API", version="1.0.0")
@@ -71,6 +72,12 @@ def api_candidates():
 @app.get("/api/equity")
 def api_equity():
     return get_equity_curve()
+
+
+@app.get("/api/state_meta")
+def api_state_meta():
+    """返回策略状态上次更新时间，供前端展示"""
+    return get_state_meta()
 
 
 @app.get("/")

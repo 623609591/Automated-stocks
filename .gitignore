@@ -1,0 +1,4 @@
+# QMT 策略写入的状态文件（可能含资金/持仓等）
+backend/strategy_state.json
+# 本项目不使用虚拟环境，若本地创建 venv 可忽略
+backend/venv/

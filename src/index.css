@@ -1,16 +1,21 @@
 :root {
-  --bg: #0f1419;
-  --card: #1a2332;
-  --border: #2d3a4f;
+  --bg: #0d1117;
+  --bg-subtle: #161b22;
+  --card: #161b22;
+  --card-hover: #1c2128;
+  --border: #30363d;
   --text: #e6edf3;
   --text-muted: #8b949e;
   --green: #3fb950;
   --red: #f85149;
   --yellow: #d29922;
   --accent: #58a6ff;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
-#root { min-height: 100vh; padding: 20px; }
+#root { min-height: 100vh; padding: 24px; }
