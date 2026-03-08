@@ -38,9 +38,9 @@ MAX_DAILY_LOSS_CLEAR = 0.02       # 单日亏2%强制清仓
 MIN_PRICE, MAX_PRICE = 8, 40      # 股价范围8-40元
 MIN_RISE, MAX_RISE = 2.0, 4.0     # 涨幅范围2-4%
 MIN_VOL_RATIO = 2.0                # 量比≥2
-MIN_TURN, MAX_TURN = 4, 15         # 换手率范围4-15%
-MIN_CAP = 50000000000             # 50亿市值
-MAX_CAP = 300000000000            # 300亿市值
+MIN_TURN, MAX_TURN = 4, 15         # 换手率范围 4%～15%（与 data['turn'] 一致，为 % 前的数字，非小数）
+MIN_CAP = 5000000000             # 50亿市值
+MAX_CAP = 30000000000            # 300亿市值
 MIN_PLATE_RISE = 1.0              # 板块涨幅≥1%
 
 # 卖出规则（阶梯止盈）
@@ -235,7 +235,6 @@ def get_env(ContextInfo):
     """判断大盘环境，返回环境类型和对应仓位"""
     sh = "000001.SH"
     try:
-        # QMT：单股多日 get_market_data 返回 DataFrame，无 pre_close 时用前一根 close 作昨收
         k_data = _qmt_get_market_data(ContextInfo, ['close'], [sh], period='1d', count=21)
         if not k_data or sh not in k_data or len(k_data[sh]['close']) < 20:
             return "YELLOW", MAX_POSITION_YELLOW
@@ -353,7 +352,7 @@ def get_board_rate(ContextInfo, code):
 def get_stock_data(ContextInfo, code):
     """获取个股核心数据（QMT：get_market_data 字段可能无 vol_ratio/turnover/float_mktcap/net_main_inflow，用可获字段近似）"""
     try:
-        fields_quote = ['close', 'open', 'high', 'low', 'volume', 'amount']
+        fields_quote = ['close', 'open', 'high', 'low', 'volume', 'amount', 'turnover']
         quote = _qmt_get_market_data(ContextInfo, fields_quote, [code], period='1d', count=1)
         kline = _qmt_get_market_data(ContextInfo, ['close'], [code], period='1d', count=20)
         if code not in quote or code not in kline or len(kline[code]['close']) < 20:
@@ -364,7 +363,14 @@ def get_stock_data(ContextInfo, code):
         amount_ = q['amount'][0] if q.get('amount') and q['amount'] else 0
         pre_close = kline[code]['close'][-2] if len(kline[code]['close']) >= 2 else close
         vol_ratio = 1.0
-        turnover = 0.0
+        # API 返回的换手率为小数（如 0.05 表示 5%），统一转为“%前的数字”以便与 MIN_TURN/MAX_TURN(4~15) 比较
+        turnover_raw = 0.0
+        if q.get('turnover') and q['turnover']:
+            try:
+                turnover_raw = float(q['turnover'][0])
+            except (TypeError, IndexError):
+                pass
+        turn_percent = turnover_raw * 100.0 if turnover_raw else 0.0
         float_mktcap = 0.0
         net_main_inflow = 0.0
         if 'volume' in q and q['volume']:
@@ -385,7 +391,7 @@ def get_stock_data(ContextInfo, code):
             'price': close,
             'rise': (close / pre_close - 1) * 100 if pre_close else 0,
             'vol_ratio': vol_ratio,
-            'turn': turnover * 100 if turnover else 0,
+            'turn': turn_percent,
             'cap': float_mktcap or MIN_CAP,
             'money': net_main_inflow or 0,
             'amount': amount_,
@@ -423,9 +429,15 @@ def select_stocks(ContextInfo, env_type):
     to_scan = list(all_stocks) if not isinstance(all_stocks, (list, tuple)) else all_stocks
     total = len(to_scan)
     _qmt_log(ContextInfo, "选股：共%d只待筛选" % total)
+    _qmt_log(ContextInfo, "筛选阈值：价[%s,%s]元 涨[%s,%s]%% 量比≥%s 换手[%s,%s]%% 市值[%s,%s]亿 板块涨≥%s%% ma5>ma10>ma20" % (
+        MIN_PRICE, MAX_PRICE, MIN_RISE, MAX_RISE, MIN_VOL_RATIO, MIN_TURN, MAX_TURN,
+        MIN_CAP / 1e8, MAX_CAP / 1e8, MIN_PLATE_RISE))
     valid_stocks = []
+    no_data_count = 0
+    fail_reasons = {'price': 0, 'rise': 0, 'vol_ratio': 0, 'turn': 0, 'cap': 0, 'ma': 0, 'st': 0, 'plate_rise': 0}
+    fail_examples = []
     for i, code in enumerate(to_scan):
-        if (i + 1) % 10 == 0 or i == 0:
+        if (i + 1) % 500 == 0 or i == 0:
             _qmt_log(ContextInfo, "选股进度：%d/%d，已得有效 %d 只" % (i + 1, total, len(valid_stocks)))
         if not code or not isinstance(code, str):
             continue
@@ -440,19 +452,49 @@ def select_stocks(ContextInfo, env_type):
             code = code + '.SH' if code.startswith(('6', '5')) else code + '.SZ'
         data = get_stock_data(ContextInfo, code)
         if not data:
+            no_data_count += 1
             continue
-        if (MIN_PRICE <= data['price'] <= MAX_PRICE and
-            MIN_RISE <= data['rise'] <= MAX_RISE and
-            data['vol_ratio'] >= MIN_VOL_RATIO and
-            MIN_TURN <= data['turn'] <= MAX_TURN and
-            MIN_CAP <= data['cap'] <= MAX_CAP and
-            data['ma5'] > data['ma10'] > data['ma20'] and
-            'ST' not in data['name'] and
-            data['plate_rise'] >= MIN_PLATE_RISE):
-            # 过滤条件中不再使用主力资金净流入和涨停开板率
-            # 利益最大化排序：用 成交额 * 量比 * 涨幅 作为评分
-            data['score'] = data['amount'] * data['vol_ratio'] * data['rise']
+        reasons = []
+        if not (MIN_PRICE <= data['price'] <= MAX_PRICE):
+            reasons.append('price(%.2f)' % data['price'])
+            fail_reasons['price'] += 1
+        if not (MIN_RISE <= data['rise'] <= MAX_RISE):
+            reasons.append('rise(%.2f%%)' % data['rise'])
+            fail_reasons['rise'] += 1
+        if data['vol_ratio'] < MIN_VOL_RATIO:
+            reasons.append('vol_ratio(%.2f)' % data['vol_ratio'])
+            fail_reasons['vol_ratio'] += 1
+        if not (MIN_TURN <= data['turn'] <= MAX_TURN):
+            reasons.append('turn(%.2f)' % data['turn'])
+            fail_reasons['turn'] += 1
+        if not (MIN_CAP <= data['cap'] <= MAX_CAP):
+            reasons.append('cap(%.0f亿)' % (data['cap'] / 1e8))
+            fail_reasons['cap'] += 1
+        ma_ok = data['ma5'] > data['ma10'] > data['ma20']
+        if not ma_ok:
+            reasons.append('ma(5=%.2f 10=%.2f 20=%.2f)' % (data['ma5'], data['ma10'], data['ma20']))
+            fail_reasons['ma'] += 1
+        if 'ST' in (data.get('name') or ''):
+            reasons.append('ST')
+            fail_reasons['st'] += 1
+        if data['plate_rise'] < MIN_PLATE_RISE:
+            reasons.append('plate_rise(%.2f)' % data['plate_rise'])
+            fail_reasons['plate_rise'] += 1
+        if not reasons:
+            data['score'] = data['amount'] * data['vol_ratio'] * max(data['rise'], 0.01)
             valid_stocks.append(data)
+        else:
+            if len(fail_examples) < 5:
+                fail_examples.append((code, data.get('name', ''), reasons, data))
+    _qmt_log(ContextInfo, "-------- 筛选统计 --------")
+    _qmt_log(ContextInfo, "无行情数据(跳过): %d 只" % no_data_count)
+    _qmt_log(ContextInfo, "未通过条件统计(同一只可能触达多条件): price=%d rise=%d vol_ratio=%d turn=%d cap=%d ma=%d ST=%d plate_rise=%d" % (
+        fail_reasons['price'], fail_reasons['rise'], fail_reasons['vol_ratio'], fail_reasons['turn'],
+        fail_reasons['cap'], fail_reasons['ma'], fail_reasons['st'], fail_reasons['plate_rise']))
+    for code, name, reasons, d in fail_examples:
+        _qmt_log(ContextInfo, "  示例未通过: %s %s | 原因: %s | 价=%.2f 涨=%.2f%% 量比=%.2f 换手=%.2f 市值=%.0f亿 ma5=%.2f ma10=%.2f ma20=%.2f 成交额=%.0f" % (
+            code, name, ','.join(reasons), d.get('price', 0), d.get('rise', 0), d.get('vol_ratio', 0), d.get('turn', 0),
+            d.get('cap', 0) / 1e8, d.get('ma5', 0), d.get('ma10', 0), d.get('ma20', 0), d.get('amount', 0)))
     _qmt_log(ContextInfo, "有效股票（%d只）：%s" % (len(valid_stocks), [s['code'] for s in valid_stocks]))
     valid_stocks.sort(key=lambda x: x['score'], reverse=True)
     selected = valid_stocks[:max_stocks]
@@ -805,6 +847,7 @@ def init(ContextInfo):
         ContextInfo.set_account(accid)
         ContextInfo.accid = accid
     _qmt_log(ContextInfo, "✅ 策略初始化完成，等待交易时间触发")
+    buy_stocks(ContextInfo)
 
 def handlebar(ContextInfo):
     """策略主循环（QMT：每根 K 线调用一次）"""
