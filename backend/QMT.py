@@ -229,6 +229,8 @@ def init_global_vars(ContextInfo):
     """初始化全局变量"""
     ContextInfo.HOLD_CODES = {}  # 持仓股: {成本价, 持仓数量, T0_flag}
     ContextInfo.T0_POSITIONS = {} # T0仓位记录
+    ContextInfo._buy_done_date = None   # 当日已执行买入的日期，避免重复
+    ContextInfo._sell_done_date = None  # 当日已执行卖出的日期，避免重复
 
 # ===================== 大盘环境判断（适配 QMT） =====================
 def get_env(ContextInfo):
@@ -354,7 +356,7 @@ def get_stock_data(ContextInfo, code):
     try:
         fields_quote = ['close', 'open', 'high', 'low', 'volume', 'amount', 'turnover']
         quote = _qmt_get_market_data(ContextInfo, fields_quote, [code], period='1d', count=1)
-        kline = _qmt_get_market_data(ContextInfo, ['close'], [code], period='1d', count=20)
+        kline = _qmt_get_market_data(ContextInfo, ['close', 'volume'], [code], period='1d', count=20)
         if code not in quote or code not in kline or len(kline[code]['close']) < 20:
             return None
         q = quote[code]
@@ -363,27 +365,56 @@ def get_stock_data(ContextInfo, code):
         amount_ = q['amount'][0] if q.get('amount') and q['amount'] else 0
         pre_close = kline[code]['close'][-2] if len(kline[code]['close']) >= 2 else close
         vol_ratio = 1.0
-        # API 返回的换手率为小数（如 0.05 表示 5%），统一转为“%前的数字”以便与 MIN_TURN/MAX_TURN(4~15) 比较
+        # 换手率：get_market_data_ex 的 K 线常无 turnover 字段，先尝试 API，否则用 成交量/流通股 计算
+        vol = float(q['volume'][0]) if (q.get('volume') and q['volume']) else 0.0
         turnover_raw = 0.0
         if q.get('turnover') and q['turnover']:
             try:
-                turnover_raw = float(q['turnover'][0])
+                v = float(q['turnover'][0])
+                # API 可能为小数（0.05=5%）或已是百分数（5 表示 5%）
+                turnover_raw = v if v > 1 else v * 100.0
             except (TypeError, IndexError):
                 pass
-        turn_percent = turnover_raw * 100.0 if turnover_raw else 0.0
+        turn_percent = turnover_raw if turnover_raw else 0.0
         float_mktcap = 0.0
         net_main_inflow = 0.0
-        if 'volume' in q and q['volume']:
-            vol = q['volume'][0]
-            if vol and kline[code]['close']:
-                avg_vol = sum(kline[code]['close']) / max(len(kline[code]['close']), 1)
-                if avg_vol and avg_vol != 0:
-                    vol_ratio = vol / avg_vol if avg_vol else 1.0
+        # 量比 = (当前总手 ÷ 已交易分钟数) ÷ 过去5日平均每分钟成交量
+        # A 股 9:30-11:30(120min) + 13:00-15:00(120min) = 240min/日
+        kline_vol = kline[code].get('volume') or []
+        if vol and kline_vol and len(kline_vol) >= 6:
+            past_vols = [float(x) for x in kline_vol[-6:-1] if x is not None]
+            if len(past_vols) >= 1:
+                now = datetime.now()
+                if now.hour < 9 or (now.hour == 9 and now.minute < 30):
+                    minutes_elapsed = 1  # 未开市避免除零
+                elif now.hour < 11 or (now.hour == 11 and now.minute <= 30):
+                    minutes_elapsed = (now.hour - 9) * 60 + (now.minute - 30)  # 9:30~11:30
+                    minutes_elapsed = max(1, min(120, minutes_elapsed))
+                elif now.hour < 13:
+                    minutes_elapsed = 120  # 午休
+                elif now.hour < 15 or (now.hour == 15 and now.minute == 0):
+                    minutes_elapsed = 120 + (now.hour - 13) * 60 + now.minute  # 13:00~15:00
+                    minutes_elapsed = max(121, min(240, minutes_elapsed))
+                else:
+                    minutes_elapsed = 240  # 收盘后
+                sum_past_5 = sum(past_vols)
+                if sum_past_5 > 0:
+                    avg_per_min_past5 = sum_past_5 / (5 * 240.0)  # 过去5日平均每分钟成交量(手)
+                    vol_per_min_today = vol / float(minutes_elapsed)  # 当前平均每分钟成交量(手)
+                    vol_ratio = vol_per_min_today / avg_per_min_past5 if avg_per_min_past5 > 0 else 1.0
         detail = ContextInfo.get_instrumentdetail(code)
         if detail and isinstance(detail, dict):
             float_vol = detail.get('FloatVolumn') or detail.get('FloatVolume') or 0
             if float_vol and close:
                 float_mktcap = float(float_vol) * float(close)
+            # API 无换手率时用 成交量/流通股 计算（与实盘显示一致）
+            # 注意：get_market_data_ex 的 volume 单位是「手」(1手=100股)，流通股单位是「股」，需先换算
+            if turn_percent == 0 and float_vol and vol:
+                try:
+                    vol_in_shares = vol * 100.0  # 手 → 股
+                    turn_percent = (vol_in_shares / float(float_vol)) * 100.0
+                except (ZeroDivisionError, TypeError):
+                    pass
         name = (detail.get('InstrumentName') or '') if detail and isinstance(detail, dict) else ''
         close_list = kline[code]['close']
         data = {
@@ -533,7 +564,6 @@ def sell_stock(ContextInfo, code, volume, price):
         return False
 
 def buy_stocks(ContextInfo):
-    print("买入执行")
     """买入执行（梯度仓位+资金优化分配）"""
     env_type, position_ratio = get_env(ContextInfo)
     if env_type == "RED":
@@ -582,7 +612,6 @@ def buy_stocks(ContextInfo):
 
 def sell_stocks(ContextInfo):
     """卖出执行（阶梯止盈+止损）"""
-    print("卖出执行")
     if not getattr(ContextInfo, 'HOLD_CODES', None) and not getattr(ContextInfo, 'T0_POSITIONS', None):
         return
     _qmt_log(ContextInfo, "\n📤 执行卖出操作：")
@@ -826,7 +855,6 @@ def _build_dashboard_state(ContextInfo):
 
 
 def write_state_to_dashboard(ContextInfo):
-    print("写入状态文件：" + DASHBOARD_STATE_PATH)
     """将当前策略状态写入状态文件，供本项目后端 API 读取并展示到监控大屏"""
     if not DASHBOARD_STATE_PATH or not DASHBOARD_STATE_PATH.strip():
         return
@@ -847,21 +875,25 @@ def init(ContextInfo):
         ContextInfo.set_account(accid)
         ContextInfo.accid = accid
     _qmt_log(ContextInfo, "✅ 策略初始化完成，等待交易时间触发")
-    buy_stocks(ContextInfo)
 
 def handlebar(ContextInfo):
-    """策略主循环（QMT：每根 K 线调用一次）"""
+    """策略主循环（QMT：每根 K 线调用一次；1 分钟周期时 14:50–14:52 会多次进入，用 _buy_done_date 当日只买一次）"""
     now = datetime.now()
     if now.weekday() >= 5:
         return
+    today = now.date()
     current_hour = now.hour
     current_minute = now.minute
     current_second = now.second
     if current_hour == BUY_HOUR and BUY_MINUTE <= current_minute <= BUY_MINUTE + 2:
         if 0 <= current_second <= 15:
-            buy_stocks(ContextInfo)
+            if getattr(ContextInfo, '_buy_done_date', None) != today:
+                ContextInfo._buy_done_date = today
+                buy_stocks(ContextInfo)
     elif SELL_START_HOUR <= current_hour <= SELL_END_HOUR:
         if (current_hour == SELL_START_HOUR and SELL_START_MIN <= current_minute) or \
            (current_hour == SELL_END_HOUR and current_minute <= SELL_END_MIN):
-            sell_stocks(ContextInfo)
+            if getattr(ContextInfo, '_sell_done_date', None) != today:
+                ContextInfo._sell_done_date = today
+                sell_stocks(ContextInfo)
     write_state_to_dashboard(ContextInfo)
