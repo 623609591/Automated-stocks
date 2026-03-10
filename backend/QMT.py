@@ -35,14 +35,12 @@ MAX_DAILY_LOSS_RATIO = 0.015      # 单日亏1.5%停止买入
 MAX_DAILY_LOSS_CLEAR = 0.02       # 单日亏2%强制清仓
 
 # 选股条件（最终版）
-MIN_PRICE, MAX_PRICE = 8, 40      # 股价范围8-40元
-MIN_RISE, MAX_RISE = 2.0, 4.0     # 涨幅范围2-4%
+MIN_PRICE, MAX_PRICE = 8, 100      # 股价范围8-100元
+MIN_RISE, MAX_RISE = 2.0, 4.0     # 涨幅范围2-5%
 MIN_VOL_RATIO = 2.0                # 量比≥2
 MIN_TURN, MAX_TURN = 4, 15         # 换手率范围 4%～15%（与 data['turn'] 一致，为 % 前的数字，非小数）
 MIN_CAP = 5000000000             # 50亿市值
 MAX_CAP = 30000000000            # 300亿市值
-MIN_PLATE_RISE = 1.0              # 板块涨幅≥1%
-
 # 卖出规则（阶梯止盈）
 TAKE_PROFIT_1 = 3.0    # 涨幅≥3%卖30%
 TAKE_PROFIT_2 = 4.0    # 涨幅≥4%再卖30%（累计60%）
@@ -318,18 +316,6 @@ def get_stock_position(ContextInfo, code):
         return {'volume': 0, 'can_use': 0, 'cost': 0.0}
 
 # ===================== 选股模块（适配 QMT 行情与合约接口） =====================
-def get_plate_rise(ContextInfo, code):
-    """获取个股所属板块当日涨幅（QMT 的 get_sector 仅支持指数代码，无法由行业名取指数；无法取得时返回 1.0 以免过滤掉所有股票）"""
-    try:
-        industry_name = get_industry_name_of_stock('SW', code)
-        if not industry_name:
-            return 1.0
-        # QMT get_sector(sector, realtime) 的 sector 是指数代码如 '000300.SH'，不是行业名称，此处无法直接取板块指数涨幅
-        return 1.0
-    except Exception as e:
-        _qmt_log(ContextInfo, "⚠️ 获取%s板块涨幅失败：%s" % (code, str(e)))
-        return 1.0
-
 def get_board_rate(ContextInfo, code):
     """涨停开板率（QMT 用 get_full_tick + get_instrumentdetail 的 UpStopPrice）"""
     try:
@@ -430,7 +416,6 @@ def get_stock_data(ContextInfo, code):
             'ma10': sum(close_list[-10:]) / 10,
             'ma20': sum(close_list) / 20,
             'pre': pre_close,
-            'plate_rise': get_plate_rise(ContextInfo, code),
             'board_rate': get_board_rate(ContextInfo, code),
             'name': name
         }
@@ -460,12 +445,12 @@ def select_stocks(ContextInfo, env_type):
     to_scan = list(all_stocks) if not isinstance(all_stocks, (list, tuple)) else all_stocks
     total = len(to_scan)
     _qmt_log(ContextInfo, "选股：共%d只待筛选" % total)
-    _qmt_log(ContextInfo, "筛选阈值：价[%s,%s]元 涨[%s,%s]%% 量比≥%s 换手[%s,%s]%% 市值[%s,%s]亿 板块涨≥%s%% ma5>ma10>ma20" % (
+    _qmt_log(ContextInfo, "筛选阈值：价[%s,%s]元 涨[%s,%s]%% 量比≥%s 换手[%s,%s]%% 市值[%s,%s]亿 ma5>ma10>ma20" % (
         MIN_PRICE, MAX_PRICE, MIN_RISE, MAX_RISE, MIN_VOL_RATIO, MIN_TURN, MAX_TURN,
-        MIN_CAP / 1e8, MAX_CAP / 1e8, MIN_PLATE_RISE))
+        MIN_CAP / 1e8, MAX_CAP / 1e8))
     valid_stocks = []
     no_data_count = 0
-    fail_reasons = {'price': 0, 'rise': 0, 'vol_ratio': 0, 'turn': 0, 'cap': 0, 'ma': 0, 'st': 0, 'plate_rise': 0}
+    fail_reasons = {'price': 0, 'rise': 0, 'vol_ratio': 0, 'turn': 0, 'cap': 0, 'ma': 0, 'st': 0}
     fail_examples = []
     for i, code in enumerate(to_scan):
         if (i + 1) % 500 == 0 or i == 0:
@@ -508,9 +493,6 @@ def select_stocks(ContextInfo, env_type):
         if 'ST' in (data.get('name') or ''):
             reasons.append('ST')
             fail_reasons['st'] += 1
-        if data['plate_rise'] < MIN_PLATE_RISE:
-            reasons.append('plate_rise(%.2f)' % data['plate_rise'])
-            fail_reasons['plate_rise'] += 1
         if not reasons:
             data['score'] = data['amount'] * data['vol_ratio'] * max(data['rise'], 0.01)
             valid_stocks.append(data)
@@ -519,9 +501,9 @@ def select_stocks(ContextInfo, env_type):
                 fail_examples.append((code, data.get('name', ''), reasons, data))
     _qmt_log(ContextInfo, "-------- 筛选统计 --------")
     _qmt_log(ContextInfo, "无行情数据(跳过): %d 只" % no_data_count)
-    _qmt_log(ContextInfo, "未通过条件统计(同一只可能触达多条件): price=%d rise=%d vol_ratio=%d turn=%d cap=%d ma=%d ST=%d plate_rise=%d" % (
+    _qmt_log(ContextInfo, "未通过条件统计(同一只可能触达多条件): price=%d rise=%d vol_ratio=%d turn=%d cap=%d ma=%d ST=%d" % (
         fail_reasons['price'], fail_reasons['rise'], fail_reasons['vol_ratio'], fail_reasons['turn'],
-        fail_reasons['cap'], fail_reasons['ma'], fail_reasons['st'], fail_reasons['plate_rise']))
+        fail_reasons['cap'], fail_reasons['ma'], fail_reasons['st']))
     for code, name, reasons, d in fail_examples:
         _qmt_log(ContextInfo, "  示例未通过: %s %s | 原因: %s | 价=%.2f 涨=%.2f%% 量比=%.2f 换手=%.2f 市值=%.0f亿 ma5=%.2f ma10=%.2f ma20=%.2f 成交额=%.0f" % (
             code, name, ','.join(reasons), d.get('price', 0), d.get('rise', 0), d.get('vol_ratio', 0), d.get('turn', 0),
@@ -535,29 +517,30 @@ def select_stocks(ContextInfo, env_type):
     return selected
 
 # ===================== 交易执行（QMT：passorder） =====================
+# 格式：passorder(opType, orderType, accountid, orderCode, prType, modelprice, volume, '', 1, '', ContextInfo)
 def buy_stock(ContextInfo, code, volume, price):
-    """买入（QMT：passorder 23, 1101, 最新价 prType=5, quickTrade=1 立即下单）"""
+    """买入（单股单账号股票最新价）"""
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
     if not accid:
         _qmt_log(ContextInfo, "❌ 未设置资金账号，无法买入")
         return False
     try:
-        passorder(23, 1101, accid, code, 5, -1, int(volume), 'cl_strategy', 1, ContextInfo)
-        _qmt_log(ContextInfo, "✅ 买入 %s %d股，单价：%.2f元" % (code, int(volume), price))
+        passorder(23, 1101, accid, code, 5, 0, int(volume), '', 1, '', ContextInfo)
+        _qmt_log(ContextInfo, "✅ 委托买入 %s %d股，单价：%.2f元" % (code, int(volume), price))
         return True
     except Exception as e:
         _qmt_log(ContextInfo, "❌ 买入 %s 失败：%s" % (code, str(e)))
         return False
 
 def sell_stock(ContextInfo, code, volume, price):
-    """卖出（QMT：passorder 24, 1101）"""
+    """卖出（单股单账号股票最新价）"""
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
     if not accid:
         _qmt_log(ContextInfo, "❌ 未设置资金账号，无法卖出")
         return False
     try:
-        passorder(24, 1101, accid, code, 5, -1, int(volume), 'cl_strategy', 1, ContextInfo)
-        _qmt_log(ContextInfo, "✅ 卖出 %s %d股，单价：%.2f元" % (code, int(volume), price))
+        passorder(24, 1101, accid, code, 5, 0, int(volume), '', 1, '', ContextInfo)
+        _qmt_log(ContextInfo, "✅ 委托卖出 %s %d股，单价：%.2f元" % (code, int(volume), price))
         return True
     except Exception as e:
         _qmt_log(ContextInfo, "❌ 卖出 %s 失败：%s" % (code, str(e)))
@@ -877,6 +860,8 @@ def init(ContextInfo):
     _qmt_log(ContextInfo, "✅ 策略初始化完成，等待交易时间触发")
 
 def handlebar(ContextInfo):
+    print("handlebar")
+    passorder(23, 1101, "test", "000001.SZ", 5, 0, 100, "示例", 1, "投资备注",ContextInfo)
     """策略主循环（QMT：每根 K 线调用一次；1 分钟周期时 14:50–14:52 会多次进入，用 _buy_done_date 当日只买一次）"""
     now = datetime.now()
     if now.weekday() >= 5:
