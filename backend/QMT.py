@@ -36,7 +36,7 @@ MAX_DAILY_LOSS_CLEAR = 0.02       # 单日亏2%强制清仓
 
 # 选股条件（最终版）
 MIN_PRICE, MAX_PRICE = 8, 100      # 股价范围8-100元
-MIN_RISE, MAX_RISE = 2.0, 4.0     # 涨幅范围2-5%
+MIN_RISE, MAX_RISE = 2.0, 5.0     # 涨幅范围2-5%
 MIN_VOL_RATIO = 2.0                # 量比≥2
 MIN_TURN, MAX_TURN = 4, 15         # 换手率范围 4%～15%（与 data['turn'] 一致，为 % 前的数字，非小数）
 MIN_CAP = 5000000000             # 50亿市值
@@ -860,8 +860,8 @@ def init(ContextInfo):
     _qmt_log(ContextInfo, "✅ 策略初始化完成，等待交易时间触发")
 
 def handlebar(ContextInfo):
-    print("handlebar")
-    passorder(23, 1101, "test", "000001.SZ", 5, 0, 100, "示例", 1, "投资备注",ContextInfo)
+    if not ContextInfo.is_last_bar():
+        return
     """策略主循环（QMT：每根 K 线调用一次；1 分钟周期时 14:50–14:52 会多次进入，用 _buy_done_date 当日只买一次）"""
     now = datetime.now()
     if now.weekday() >= 5:
