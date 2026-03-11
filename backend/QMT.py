@@ -50,11 +50,6 @@ STOP_LOSS = -1.5       # 亏损≤-1.5%止损
 STOP_LOSS_EARLY = -1.0 # 亏损≤-1%且量比<1提前止损
 SELL_CUTOFF_TIME = 10*60 + 15     # 10:15前未冲高卖出
 
-# T+0参数
-T0_BUY_DOWN = -0.5     # 回调至成本价-0.5%买回
-T0_SELL_UP = 1.0       # 反弹≥1%卖出T0仓位
-T0_MAX_RATIO = 1/3     # T0仓位不超过原持仓1/3
-
 # 交易时间
 BUY_HOUR, BUY_MINUTE = 14, 50    # 14:55-14:57买入
 SELL_START_HOUR, SELL_START_MIN = 9, 30  # 9:30开始卖出
@@ -225,10 +220,8 @@ def _qmt_log(ContextInfo, msg):
 # 全局变量（策略编辑器用ContextInfo存储）
 def init_global_vars(ContextInfo):
     """初始化全局变量"""
-    ContextInfo.HOLD_CODES = {}  # 持仓股: {成本价, 持仓数量, T0_flag}
-    ContextInfo.T0_POSITIONS = {} # T0仓位记录
+    ContextInfo.HOLD_CODES = {}  # 持仓股: {成本价, 持仓数量}
     ContextInfo._buy_done_date = None   # 当日已执行买入的日期，避免重复
-    ContextInfo._sell_done_date = None  # 当日已执行卖出的日期，避免重复
 
 # ===================== 大盘环境判断（适配 QMT） =====================
 def get_env(ContextInfo):
@@ -340,10 +333,18 @@ def get_board_rate(ContextInfo, code):
 def get_stock_data(ContextInfo, code):
     """获取个股核心数据（QMT：get_market_data 字段可能无 vol_ratio/turnover/float_mktcap/net_main_inflow，用可获字段近似）"""
     try:
+        # 账户同步的 code 可能无后缀，QMT 行情接口要求 600509.SH / 000001.SZ 等格式
+        if isinstance(code, str) and code and '.' not in code:
+            if code.startswith(('6', '5')):
+                code = code + '.SH'
+            elif code.startswith(('0', '3')):
+                code = code + '.SZ'
         fields_quote = ['close', 'open', 'high', 'low', 'volume', 'amount', 'turnover']
         quote = _qmt_get_market_data(ContextInfo, fields_quote, [code], period='1d', count=1)
         kline = _qmt_get_market_data(ContextInfo, ['close', 'volume'], [code], period='1d', count=20)
         if code not in quote or code not in kline or len(kline[code]['close']) < 20:
+            klen = len(kline.get(code, {}).get('close', [])) if code in kline else 0
+            _qmt_log(ContextInfo, "⚠️ get_stock_data 无数据: %s (在quote=%s 在kline=%s K线根数=%s，需≥20)" % (code, code in quote, code in kline, klen))
             return None
         q = quote[code]
         close = q['close'][0] if q['close'] else 0
@@ -416,7 +417,6 @@ def get_stock_data(ContextInfo, code):
             'ma10': sum(close_list[-10:]) / 10,
             'ma20': sum(close_list) / 20,
             'pre': pre_close,
-            'board_rate': get_board_rate(ContextInfo, code),
             'name': name
         }
         return data
@@ -591,46 +591,56 @@ def buy_stocks(ContextInfo):
         if volume < MIN_BUY_VOLUME:
             continue
         if buy_stock(ContextInfo, code, volume, price):
-            ContextInfo.HOLD_CODES[code] = {'cost': price, 'volume': volume, 't0_flag': False}
+            ContextInfo.HOLD_CODES[code] = {'cost': price, 'volume': volume}
 
 def sell_stocks(ContextInfo):
-    _qmt_log(ContextInfo, "\n📤 执行卖出操作：")
-    """卖出执行（阶梯止盈+止损）"""
-    if not getattr(ContextInfo, 'HOLD_CODES', None) and not getattr(ContextInfo, 'T0_POSITIONS', None):
+    #若没有持仓，则不卖出
+    if not getattr(ContextInfo, 'HOLD_CODES', None):
         return
     current_time = datetime.now()
     current_minute = current_time.hour * 60 + current_time.minute
+    #遍历持仓
     for code in list(getattr(ContextInfo, 'HOLD_CODES', {}).keys()):
         pos = get_stock_position(ContextInfo, code)
+        #若持仓为0，则不卖出
         if pos['can_use'] == 0:
             continue
+        #获取当前股票当前市场价格数据
         data = get_stock_data(ContextInfo, code)
+        print("data: " + str(data))
+        #若股票数据为空，则最新价格卖出持仓全部
         if not data:
             sell_stock(ContextInfo, code, pos['can_use'], 0.0)
             _qmt_log(ContextInfo, "❌ %s 数据异常，兜底卖出 %d股" % (code, pos['can_use']))
             if hasattr(ContextInfo, 'HOLD_CODES') and code in ContextInfo.HOLD_CODES:
                 del ContextInfo.HOLD_CODES[code]
             continue
+        #获取当前股票当前市场价格
         current_price = data['price']
+        #获取当前股票当前市场价格相对于买入成本的涨幅
         current_rise = (current_price / data['pre'] - 1) * 100 if data['pre'] else 0
         hold_volume = pos['can_use']
+        #当涨幅小于STOP_LOSS_EARLY且量比小于1，则全部最新价格卖出止损
         if current_rise <= STOP_LOSS_EARLY and data['vol_ratio'] < 1.0:
             sell_stock(ContextInfo, code, hold_volume, current_price)
             _qmt_log(ContextInfo, "🔴 %s 提前止损：跌幅%.2f%%，卖出%d股" % (code, current_rise, hold_volume))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 del ContextInfo.HOLD_CODES[code]
             continue
+        #当涨幅小于STOP_LOSS，则全部最新价格卖出止损
         if current_rise <= STOP_LOSS:
             sell_stock(ContextInfo, code, hold_volume, current_price)
             _qmt_log(ContextInfo, "🔴 %s 止损：跌幅%.2f%%，卖出%d股" % (code, current_rise, hold_volume))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 del ContextInfo.HOLD_CODES[code]
             continue
+        #当涨幅大于TAKE_PROFIT_4，则全部最新价格卖出止盈
         if current_rise >= TAKE_PROFIT_4:
             sell_stock(ContextInfo, code, hold_volume, current_price)
             _qmt_log(ContextInfo, "🟢 %s 止盈6%%：涨幅%.2f%%，卖出%d股" % (code, current_rise, hold_volume))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 del ContextInfo.HOLD_CODES[code]
+        #当涨幅大于TAKE_PROFIT_3，则90%最新价格卖出止盈
         elif current_rise >= TAKE_PROFIT_3:
             sell_vol = (int(hold_volume * 0.9) // 100) * 100
             if sell_vol <= 0 and hold_volume > 0:
@@ -639,6 +649,7 @@ def sell_stocks(ContextInfo):
             _qmt_log(ContextInfo, "🟢 %s 止盈5%%：涨幅%.2f%%，卖出%d股" % (code, current_rise, sell_vol))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 ContextInfo.HOLD_CODES[code]['volume'] = hold_volume - sell_vol
+        #当涨幅大于TAKE_PROFIT_2，则60%最新价格卖出止盈
         elif current_rise >= TAKE_PROFIT_2:
             sell_vol = (int(hold_volume * 0.6) // 100) * 100
             if sell_vol <= 0 and hold_volume > 0:
@@ -647,6 +658,7 @@ def sell_stocks(ContextInfo):
             _qmt_log(ContextInfo, "🟢 %s 止盈4%%：涨幅%.2f%%，卖出%d股" % (code, current_rise, sell_vol))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 ContextInfo.HOLD_CODES[code]['volume'] = hold_volume - sell_vol
+        #当涨幅大于TAKE_PROFIT_1，则30%最新价格卖出止盈
         elif current_rise >= TAKE_PROFIT_1:
             sell_vol = (int(hold_volume * 0.3) // 100) * 100
             if sell_vol <= 0 and hold_volume > 0:
@@ -655,62 +667,22 @@ def sell_stocks(ContextInfo):
             _qmt_log(ContextInfo, "🟢 %s 止盈3%%：涨幅%.2f%%，卖出%d股" % (code, current_rise, sell_vol))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 ContextInfo.HOLD_CODES[code]['volume'] = hold_volume - sell_vol
+       #当当前分钟数大于SELL_CUTOFF_TIME，则全部最新价格卖出
         elif current_minute >= SELL_CUTOFF_TIME:
             sell_stock(ContextInfo, code, hold_volume, current_price)
             _qmt_log(ContextInfo, "⏰ %s 10:15未冲高，卖出%d股" % (code, hold_volume))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 del ContextInfo.HOLD_CODES[code]
-    handle_t0(ContextInfo)
+    #当当前分钟数大于SELL_END_HOUR * 60 + SELL_END_MIN，则全部最新价格卖出
     if current_minute >= SELL_END_HOUR * 60 + SELL_END_MIN:
         for code in list(getattr(ContextInfo, 'HOLD_CODES', {}).keys()):
             pos = get_stock_position(ContextInfo, code)
             if pos['can_use'] > 0:
-                sell_stock(ContextInfo, code, pos['can_use'], 0.0)
+                price = pos.get('cost') or 0.0
+                sell_stock(ContextInfo, code, pos['can_use'], price)
                 _qmt_log(ContextInfo, "⏰ %s 10:30强制清仓，卖出%d股" % (code, pos['can_use']))
                 if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                     del ContextInfo.HOLD_CODES[code]
-                if code in getattr(ContextInfo, 'T0_POSITIONS', {}):
-                    del ContextInfo.T0_POSITIONS[code]
-
-def handle_t0(ContextInfo):
-    """处理日内T+0"""
-    for code in list(getattr(ContextInfo, 'T0_POSITIONS', {}).keys()):
-        pos = get_stock_position(ContextInfo, code)
-        if pos['can_use'] == 0:
-            if code in getattr(ContextInfo, 'T0_POSITIONS', {}):
-                del ContextInfo.T0_POSITIONS[code]
-            continue
-        data = get_stock_data(ContextInfo, code)
-        if not data:
-            continue
-        current_price = data['price']
-        t0_cost = ContextInfo.T0_POSITIONS[code]['cost']
-        rise = (current_price / t0_cost - 1) * 100
-        if rise >= T0_SELL_UP:
-            sell_stock(ContextInfo, code, pos['can_use'], current_price)
-            _qmt_log(ContextInfo, "📈 T+0止盈 %s：盈利%.2f%%，卖出%d股" % (code, rise, pos['can_use']))
-            if code in getattr(ContextInfo, 'T0_POSITIONS', {}):
-                del ContextInfo.T0_POSITIONS[code]
-    for code in list(getattr(ContextInfo, 'HOLD_CODES', {}).keys()):
-        if code in getattr(ContextInfo, 'T0_POSITIONS', {}):
-            continue
-        pos = get_stock_position(ContextInfo, code)
-        if pos['can_use'] == 0:
-            continue
-        data = get_stock_data(ContextInfo, code)
-        if not data:
-            continue
-        current_price = data['price']
-        cost_price = ContextInfo.HOLD_CODES[code]['cost']
-        drop = (current_price / cost_price - 1) * 100
-        if drop <= T0_BUY_DOWN and data['vol_ratio'] >= 1.2:
-            t0_volume = int(pos['volume'] * T0_MAX_RATIO) // 100 * 100
-            t0_volume = max(t0_volume, MIN_BUY_VOLUME)
-            if t0_volume > 0:
-                buy_stock(ContextInfo, code, t0_volume, current_price)
-                _qmt_log(ContextInfo, "📉 T+0买入 %s：回调%.2f%%，买入%d股" % (code, drop, t0_volume))
-                ContextInfo.T0_POSITIONS[code] = {'cost': current_price, 'volume': t0_volume}
-                ContextInfo.HOLD_CODES[code]['t0_flag'] = True
 
 def sell_all_positions(ContextInfo):
     """强制清仓（QMT：get_trade_detail_data position 逐只卖出）"""
@@ -718,19 +690,18 @@ def sell_all_positions(ContextInfo):
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
     if not accid:
         ContextInfo.HOLD_CODES = {}
-        ContextInfo.T0_POSITIONS = {}
         return
     try:
         pos_list = get_trade_detail_data(accid, 'stock', 'position')
         for obj in pos_list or []:
             code = getattr(obj, 'm_strInstrumentID', '')
             can_use = int(getattr(obj, 'm_nCanUseVolume', 0) or 0)
+            cost = float(getattr(obj, 'm_dOpenPrice', 0) or 0)
             if code and can_use > 0:
-                sell_stock(ContextInfo, code, can_use, 0.0)
+                sell_stock(ContextInfo, code, can_use, cost)
     except Exception as e:
         _qmt_log(ContextInfo, "清仓异常：%s" % str(e))
     ContextInfo.HOLD_CODES = {}
-    ContextInfo.T0_POSITIONS = {}
 
 # ===================== 监控大屏状态导出（供本项目后端读取） =====================
 def _get_market_env_detail(ContextInfo):
@@ -857,7 +828,31 @@ def write_state_to_dashboard(ContextInfo):
     except Exception as e:
         _qmt_log(ContextInfo, "⚠️ 写入监控状态文件失败: %s" % str(e))
 
-# ===================== QMT 策略入口（必须实现） =====================
+def _sync_hold_from_account(ContextInfo):
+    """从账户实际持仓同步到 HOLD_CODES，重启策略后能识别已有持仓"""
+    accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
+    if not accid:
+        return
+    try:
+        pos_list = get_trade_detail_data(accid, 'stock', 'position')
+        for obj in pos_list or []:
+            code = getattr(obj, 'm_strInstrumentID', '') or ''
+            if not code:
+                continue
+            volume = int(getattr(obj, 'm_nVolume', 0) or 0)
+            can_use = int(getattr(obj, 'm_nCanUseVolume', 0) or 0)
+            cost = float(getattr(obj, 'm_dOpenPrice', 0) or 0)
+            if can_use > 0 or volume > 0:
+                ContextInfo.HOLD_CODES[code] = {
+                    'cost': cost,
+                    'volume': volume if volume > 0 else can_use
+                }
+        if ContextInfo.HOLD_CODES:
+            _qmt_log(ContextInfo, "✅ 已从账户同步持仓 %d 只：%s" % (len(ContextInfo.HOLD_CODES), list(ContextInfo.HOLD_CODES.keys())))
+    except Exception as e:
+        _qmt_log(ContextInfo, "⚠️ 同步账户持仓失败：%s" % str(e))
+
+# 初始化函数
 def init(ContextInfo):
     """策略初始化（QMT 要求：init 与 handlebar 必实现；set_account 绑定资金账号）"""
     init_global_vars(ContextInfo)
@@ -865,12 +860,14 @@ def init(ContextInfo):
     if accid:
         ContextInfo.set_account(accid)
         ContextInfo.accid = accid
+    _sync_hold_from_account(ContextInfo)
     _qmt_log(ContextInfo, "✅ 策略初始化完成，等待交易时间触发")
 
+# 主循环函数
 def handlebar(ContextInfo):
+    # 若不是最后一根K线，则不执行
     if not ContextInfo.is_last_bar():
         return
-    """策略主循环（QMT：每根 K 线调用一次；1 分钟周期时 14:50–14:52 会多次进入，用 _buy_done_date 当日只买一次）"""
     now = datetime.now()
     if now.weekday() >= 5:
         return
@@ -878,15 +875,15 @@ def handlebar(ContextInfo):
     current_hour = now.hour
     current_minute = now.minute
     current_second = now.second
+    #当前时间是否在BUY_MINUTE和BUY_MINUTE+2之间，并且当前秒数在0-15之间，并且当天没有买入过，满足条件执行买入操作
     if current_hour == BUY_HOUR and BUY_MINUTE <= current_minute <= BUY_MINUTE + 2:
         if 0 <= current_second <= 15:
             if getattr(ContextInfo, '_buy_done_date', None) != today:
                 ContextInfo._buy_done_date = today
                 buy_stocks(ContextInfo)
+    # 卖出窗口内每次 handlebar 都执行卖出逻辑（止盈/止损/10:15未冲高/10:30清仓）
     elif SELL_START_HOUR <= current_hour <= SELL_END_HOUR:
         if (current_hour == SELL_START_HOUR and SELL_START_MIN <= current_minute) or \
            (current_hour == SELL_END_HOUR and current_minute <= SELL_END_MIN):
-            if getattr(ContextInfo, '_sell_done_date', None) != today:
-                ContextInfo._sell_done_date = today
-                sell_stocks(ContextInfo)
+            sell_stocks(ContextInfo)
     write_state_to_dashboard(ContextInfo)
