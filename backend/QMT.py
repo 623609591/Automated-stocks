@@ -236,10 +236,10 @@ def get_env(ContextInfo):
     sh = "000001.SH"
     try:
         k_data = _qmt_get_market_data(ContextInfo, ['close'], [sh], period='1d', count=21)
-        if not k_data or sh not in k_data or len(k_data[sh]['close']) < 20:
+        if not k_data or sh not in k_data or len(k_data[sh]['close']) < 21:
             return "YELLOW", MAX_POSITION_YELLOW
         close_list = k_data[sh]['close']
-        close_list = close_list[-20:]
+        close_list = close_list[-21:]  # 取 21 根，shift(1)+dropna 后剩 20 行，才能满足 len(k_df)>=20
         k_df = pd.DataFrame({'close': close_list})
         k_df['pre_close'] = k_df['close'].shift(1)
         k_df = k_df.dropna()
@@ -730,9 +730,9 @@ def _get_market_env_detail(ContextInfo):
     sh = "000001.SH"
     try:
         k_data = _qmt_get_market_data(ContextInfo, ['close'], [sh], period='1d', count=21)
-        if not k_data or sh not in k_data or len(k_data[sh]['close']) < 20:
+        if not k_data or sh not in k_data or len(k_data[sh]['close']) < 21:
             return {"signal": "YELLOW", "shIndex": 0, "shMa20": 0, "shTodayReturn": 0, "dropDaysIn10": 0}
-        close_list = k_data[sh]['close'][-20:]
+        close_list = k_data[sh]['close'][-21:]
         k_df = pd.DataFrame({'close': close_list})
         k_df['pre_close'] = k_df['close'].shift(1)
         k_df = k_df.dropna()
