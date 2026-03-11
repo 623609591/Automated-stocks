@@ -594,10 +594,10 @@ def buy_stocks(ContextInfo):
             ContextInfo.HOLD_CODES[code] = {'cost': price, 'volume': volume, 't0_flag': False}
 
 def sell_stocks(ContextInfo):
+    _qmt_log(ContextInfo, "\n📤 执行卖出操作：")
     """卖出执行（阶梯止盈+止损）"""
     if not getattr(ContextInfo, 'HOLD_CODES', None) and not getattr(ContextInfo, 'T0_POSITIONS', None):
         return
-    _qmt_log(ContextInfo, "\n📤 执行卖出操作：")
     current_time = datetime.now()
     current_minute = current_time.hour * 60 + current_time.minute
     for code in list(getattr(ContextInfo, 'HOLD_CODES', {}).keys()):
@@ -632,19 +632,25 @@ def sell_stocks(ContextInfo):
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 del ContextInfo.HOLD_CODES[code]
         elif current_rise >= TAKE_PROFIT_3:
-            sell_vol = int(hold_volume * 0.9)
+            sell_vol = (int(hold_volume * 0.9) // 100) * 100
+            if sell_vol <= 0 and hold_volume > 0:
+                sell_vol = min(100, hold_volume)
             sell_stock(ContextInfo, code, sell_vol, current_price)
             _qmt_log(ContextInfo, "🟢 %s 止盈5%%：涨幅%.2f%%，卖出%d股" % (code, current_rise, sell_vol))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 ContextInfo.HOLD_CODES[code]['volume'] = hold_volume - sell_vol
         elif current_rise >= TAKE_PROFIT_2:
-            sell_vol = int(hold_volume * 0.6)
+            sell_vol = (int(hold_volume * 0.6) // 100) * 100
+            if sell_vol <= 0 and hold_volume > 0:
+                sell_vol = min(100, hold_volume)
             sell_stock(ContextInfo, code, sell_vol, current_price)
             _qmt_log(ContextInfo, "🟢 %s 止盈4%%：涨幅%.2f%%，卖出%d股" % (code, current_rise, sell_vol))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 ContextInfo.HOLD_CODES[code]['volume'] = hold_volume - sell_vol
         elif current_rise >= TAKE_PROFIT_1:
-            sell_vol = int(hold_volume * 0.3)
+            sell_vol = (int(hold_volume * 0.3) // 100) * 100
+            if sell_vol <= 0 and hold_volume > 0:
+                sell_vol = min(100, hold_volume)
             sell_stock(ContextInfo, code, sell_vol, current_price)
             _qmt_log(ContextInfo, "🟢 %s 止盈3%%：涨幅%.2f%%，卖出%d股" % (code, current_rise, sell_vol))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
@@ -663,6 +669,8 @@ def sell_stocks(ContextInfo):
                 _qmt_log(ContextInfo, "⏰ %s 10:30强制清仓，卖出%d股" % (code, pos['can_use']))
                 if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                     del ContextInfo.HOLD_CODES[code]
+                if code in getattr(ContextInfo, 'T0_POSITIONS', {}):
+                    del ContextInfo.T0_POSITIONS[code]
 
 def handle_t0(ContextInfo):
     """处理日内T+0"""
