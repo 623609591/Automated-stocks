@@ -19,14 +19,14 @@ MAX_POSITION_SUPER_GREEN = 0.85   # 超强绿灯 → 85%
 MAX_POSITION_STRONG_GREEN = 0.75  # 强绿灯 → 75%
 MAX_POSITION_GREEN = 0.70         # 普通绿灯 → 70%
 MAX_POSITION_STRONG_YELLOW = 0.50 # 强黄灯 → 50%
-MAX_POSITION_YELLOW = 0.40        # 普通黄灯 → 40%
+MAX_POSITION_YELLOW = 0.20        # 普通黄灯 → 20%
 MAX_POSITION_RED = 0.00           # 红灯 → 0%
 
 # 持仓数量限制
-MAX_STOCKS_SUPER_GREEN = 4        # 超强绿灯最多4只
-MAX_STOCKS_STRONG_GREEN = 4       # 强绿灯最多4只
-MAX_STOCKS_GREEN = 3              # 普通绿灯最多3只
-MAX_STOCKS_STRONG_YELLOW = 3      # 强黄灯最多3只
+MAX_STOCKS_SUPER_GREEN = 7        # 超强绿灯最多7只
+MAX_STOCKS_STRONG_GREEN = 5       # 强绿灯最多5只
+MAX_STOCKS_GREEN = 4              # 普通绿灯最多4只
+MAX_STOCKS_STRONG_YELLOW = 2      # 强黄灯最多2只
 MAX_STOCKS_YELLOW = 2             # 普通黄灯最多2只
 
 # 交易基础参数
@@ -46,12 +46,13 @@ TAKE_PROFIT_1 = 3.0    # 涨幅≥3%卖30%
 TAKE_PROFIT_2 = 4.0    # 涨幅≥4%再卖30%（累计60%）
 TAKE_PROFIT_3 = 5.0    # 涨幅≥5%再卖30%（累计90%）
 TAKE_PROFIT_4 = 6.0    # 涨幅≥6%清仓剩余
-STOP_LOSS = -1.5       # 亏损≤-1.5%止损
 STOP_LOSS_EARLY = -1.0 # 亏损≤-1%且量比<1提前止损
+ATR_PERIOD = 14        # ATR 周期
+ATR_STOP_MULT = 1.5    # 止损 = 成本价 - ATR_STOP_MULT * ATR(14)，波动大止损宽、波动小止损窄
 SELL_CUTOFF_TIME = 10*60 + 15     # 10:15前未冲高卖出
 
 # 交易时间
-BUY_HOUR, BUY_MINUTE = 11, 22    # 14:55-14:57买入
+BUY_HOUR, BUY_MINUTE = 14, 50    # 14:55-14:57买入
 SELL_START_HOUR, SELL_START_MIN = 9, 30  # 9:30开始卖出
 SELL_END_HOUR, SELL_END_MIN = 10, 30     # 10:30前必须卖完
 
@@ -263,7 +264,7 @@ def get_env(ContextInfo):
             _qmt_log(ContextInfo, "🟡 强黄灯 → 55%仓位")
             return "STRONG_YELLOW", MAX_POSITION_STRONG_YELLOW
         else:
-            _qmt_log(ContextInfo, "🟡 普通黄灯 → 40%仓位")
+            _qmt_log(ContextInfo, "🟡 普通黄灯 → 20%%仓位")
             return "YELLOW", MAX_POSITION_YELLOW
     except Exception as e:
         _qmt_log(ContextInfo, "⚠️ 环境判断出错：%s，默认黄灯" % str(e))
@@ -318,7 +319,7 @@ def get_stock_data(ContextInfo, code):
                 code = code + '.SZ'
         fields_quote = ['close', 'open', 'high', 'low', 'volume', 'amount', 'turnover']
         quote = _qmt_get_market_data(ContextInfo, fields_quote, [code], period='1d', count=1)
-        kline = _qmt_get_market_data(ContextInfo, ['close', 'volume'], [code], period='1d', count=20)
+        kline = _qmt_get_market_data(ContextInfo, ['close', 'volume', 'high', 'low'], [code], period='1d', count=20)
         if code not in quote or code not in kline or len(kline[code]['close']) < 20:
             klen = len(kline.get(code, {}).get('close', [])) if code in kline else 0
             _qmt_log(ContextInfo, "⚠️ get_stock_data 无数据: %s (在quote=%s 在kline=%s K线根数=%s，需≥20)" % (code, code in quote, code in kline, klen))
@@ -381,6 +382,28 @@ def get_stock_data(ContextInfo, code):
                     pass
         name = (detail.get('InstrumentName') or '') if detail and isinstance(detail, dict) else ''
         close_list = kline[code]['close']
+        # ATR(14)：True Range = max(high-low, |high-prev_close|, |low-prev_close|)，取最近 14 日平均
+        atr14 = 0.0
+        if len(close_list) >= ATR_PERIOD + 1 and kline[code].get('high') and kline[code].get('low'):
+            try:
+                closes = [float(x) for x in close_list[-(ATR_PERIOD + 1):]]
+                highs = [float(x) for x in kline[code]['high'][-(ATR_PERIOD + 1):]]
+                lows = [float(x) for x in kline[code]['low'][-(ATR_PERIOD + 1):]]
+                tr_list = []
+                for i in range(1, len(closes)):
+                    tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+                    tr_list.append(tr)
+                if len(tr_list) >= ATR_PERIOD:
+                    atr14 = sum(tr_list[-ATR_PERIOD:]) / ATR_PERIOD
+            except (TypeError, IndexError, ZeroDivisionError):
+                pass
+        # 当日分时均价 = 当日成交额 / 当日成交量(股)，volume 单位为手(1手=100股)
+        day_avg_price = 0.0
+        if vol and float(vol) > 0 and amount_:
+            try:
+                day_avg_price = float(amount_) / (float(vol) * 100.0)
+            except (TypeError, ZeroDivisionError):
+                pass
         data = {
             'code': code,
             'price': close,
@@ -390,6 +413,8 @@ def get_stock_data(ContextInfo, code):
             'cap': float_mktcap or MIN_CAP,
             'money': net_main_inflow or 0,
             'amount': amount_,
+            'day_avg_price': day_avg_price,
+            'atr14': atr14,
             'ma5': sum(close_list[-5:]) / 5,
             'ma10': sum(close_list[-10:]) / 10,
             'ma20': sum(close_list) / 20,
@@ -411,7 +436,6 @@ def select_stocks(ContextInfo, env_type):
         'YELLOW': MAX_STOCKS_YELLOW,
         'RED': 0
     }.get(env_type, 0)
-    #红灯环境，不选股
     if max_stocks == 0:
         return []
     try:
@@ -428,7 +452,7 @@ def select_stocks(ContextInfo, env_type):
         MIN_CAP / 1e8, MAX_CAP / 1e8))
     valid_stocks = []
     no_data_count = 0
-    fail_reasons = {'price': 0, 'rise': 0, 'vol_ratio': 0, 'turn': 0, 'cap': 0, 'ma': 0, 'st': 0}
+    fail_reasons = {'price': 0, 'rise': 0, 'vol_ratio': 0, 'turn': 0, 'cap': 0, 'ma': 0, 'st': 0, 'above_avg': 0}
     fail_examples = []
     #遍历待筛选股票，过滤筛选条件
     for i, code in enumerate(to_scan):
@@ -472,6 +496,11 @@ def select_stocks(ContextInfo, env_type):
         if 'ST' in (data.get('name') or ''):
             reasons.append('ST')
             fail_reasons['st'] += 1
+        # 当前价必须大于当日分时均价
+        day_avg = data.get('day_avg_price') or 0
+        if day_avg > 0 and data['price'] <= day_avg:
+            reasons.append('price(%.2f)<=分时均价(%.2f)' % (data['price'], day_avg))
+            fail_reasons['above_avg'] += 1
         if not reasons:
             data['score'] = data['amount'] * data['vol_ratio'] * max(data['rise'], 0.01)
             valid_stocks.append(data)
@@ -480,9 +509,9 @@ def select_stocks(ContextInfo, env_type):
                 fail_examples.append((code, data.get('name', ''), reasons, data))
     _qmt_log(ContextInfo, "-------- 筛选统计 --------")
     _qmt_log(ContextInfo, "无行情数据(跳过): %d 只" % no_data_count)
-    _qmt_log(ContextInfo, "未通过条件统计(同一只可能触达多条件): price=%d rise=%d vol_ratio=%d turn=%d cap=%d ma=%d ST=%d" % (
+    _qmt_log(ContextInfo, "未通过条件统计(同一只可能触达多条件): price=%d rise=%d vol_ratio=%d turn=%d cap=%d ma=%d ST=%d above_avg=%d" % (
         fail_reasons['price'], fail_reasons['rise'], fail_reasons['vol_ratio'], fail_reasons['turn'],
-        fail_reasons['cap'], fail_reasons['ma'], fail_reasons['st']))
+        fail_reasons['cap'], fail_reasons['ma'], fail_reasons['st'], fail_reasons['above_avg']))
     _qmt_log(ContextInfo, "有效股票（%d只）：%s" % (len(valid_stocks), [s['code'] for s in valid_stocks]))
     valid_stocks.sort(key=lambda x: x['score'], reverse=True)
     selected = valid_stocks[:max_stocks]
@@ -556,11 +585,17 @@ def buy_stocks(ContextInfo):
         _qmt_log(ContextInfo, "无符合条件股票，不买入")
         return
     _qmt_log(ContextInfo, "\n💰 账户总资产：%.0f元，可买金额：%.0f元" % (total_asset, buy_capital))
-    buy_amounts = []
-    first_amount = buy_capital * 0.6   # 首笔集中：60%给评分第一的标的
-    rest_amount = (buy_capital - first_amount) / (stock_count - 1) if stock_count > 1 else 0
-    for i in range(stock_count):
-        buy_amounts.append(first_amount if i == 0 else rest_amount)
+    # 可买金额在筛选出的股票间平均分配
+    buy_amounts = [buy_capital / stock_count] * stock_count
+    # 若未筛满当前环境可买上限，单只金额不超过总资产的 20%
+    env_max_stocks = {
+        'SUPER_GREEN': MAX_STOCKS_SUPER_GREEN, 'STRONG_GREEN': MAX_STOCKS_STRONG_GREEN,
+        'GREEN': MAX_STOCKS_GREEN, 'STRONG_YELLOW': MAX_STOCKS_STRONG_YELLOW,
+        'YELLOW': MAX_STOCKS_YELLOW
+    }.get(env_type, 0)
+    if stock_count < env_max_stocks and env_max_stocks > 0:
+        cap_per_stock = total_asset * 0.20
+        buy_amounts = [min(a, cap_per_stock) for a in buy_amounts]
     ContextInfo.HOLD_CODES = {}
     for i, stock in enumerate(selected_stocks):
         code = stock['code']
@@ -569,7 +604,8 @@ def buy_stocks(ContextInfo):
         volume = int(amount / price) // 100 * 100
         volume = max(volume, MIN_BUY_VOLUME)
         if stock['turn'] >= 10:
-            volume = max(volume // 2, MIN_BUY_VOLUME)
+            volume = (volume // 2) // 100 * 100  # 减半并向下取整到100的倍数
+            volume = max(volume, MIN_BUY_VOLUME)
             _qmt_log(ContextInfo, "⚠️ %s 换手率≥10%%，买入数量减半：%d股" % (code, volume))
         if volume < MIN_BUY_VOLUME:
             continue
@@ -611,10 +647,16 @@ def sell_stocks(ContextInfo):
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 del ContextInfo.HOLD_CODES[code]
             continue
-        #当涨幅小于STOP_LOSS，则全部最新价格卖出止损
-        if current_rise <= STOP_LOSS:
+        # 止损：当前价 <= 成本价 - 1.5*ATR(14)，波动大止损宽、波动小止损窄
+        cost = pos.get('cost') or (getattr(ContextInfo, 'HOLD_CODES', {}).get(code, {}).get('cost')) or 0
+        atr14 = data.get('atr14') or 0
+        if cost and cost > 0 and atr14 > 0:
+            stop_price = cost - ATR_STOP_MULT * atr14
+        else:
+            stop_price = cost * 0.985  # 无 ATR 时兜底按 -1.5%
+        if current_price <= stop_price:
             sell_stock(ContextInfo, code, hold_volume, current_price)
-            _qmt_log(ContextInfo, "🔴 %s 止损：跌幅%.2f%%，卖出%d股" % (code, current_rise, hold_volume))
+            _qmt_log(ContextInfo, "🔴 %s 止损(价%.2f<=%.2f=成本%.2f-1.5*ATR%.2f)，卖出%d股" % (code, current_price, stop_price, cost, atr14, hold_volume))
             if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                 del ContextInfo.HOLD_CODES[code]
             continue
@@ -771,7 +813,7 @@ def _build_dashboard_state(ContextInfo):
             "sellStart": "%02d:%02d" % (SELL_START_HOUR, SELL_START_MIN),
             "sellEnd": "%02d:%02d" % (SELL_END_HOUR, SELL_END_MIN),
             "takeProfit": TAKE_PROFIT_1,
-            "stopLoss": STOP_LOSS,
+            "stopLoss": "成本-1.5×ATR(14)",
             "minPrice": MIN_PRICE,
             "maxPrice": MAX_PRICE,
             "minRise": MIN_RISE,
