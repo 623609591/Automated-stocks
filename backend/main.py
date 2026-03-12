@@ -9,7 +9,7 @@ from strategy import (
     get_connection_status,
     get_account_overview,
     get_market_env,
-    get_strategy_params,
+    get_market_sentiment,
     get_holdings,
     get_trade_history,
     get_next_schedule,
@@ -44,9 +44,9 @@ def api_market_env():
     return get_market_env()
 
 
-@app.get("/api/strategy_params")
-def api_strategy_params():
-    return get_strategy_params()
+@app.get("/api/market_sentiment")
+def api_market_sentiment():
+    return get_market_sentiment()
 
 
 @app.get("/api/holdings")

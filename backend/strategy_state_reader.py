@@ -45,10 +45,6 @@ def get_market_env_from_state(state):
     return state.get("market_env") if state else None
 
 
-def get_strategy_params_from_state(state):
-    return state.get("strategy_params") if state else None
-
-
 def get_holdings_from_state(state):
     return state.get("holdings") if state else None
 
@@ -67,3 +63,7 @@ def get_candidates_from_state(state):
 
 def get_equity_curve_from_state(state):
     return state.get("equity") if state else None
+
+
+def get_market_sentiment_from_state(state):
+    return state.get("market_sentiment") if state else None

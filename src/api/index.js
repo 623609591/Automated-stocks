@@ -22,7 +22,6 @@ async function fetchOrEmpty(getEmpty, path) {
 const emptyConnection = () => ({ connected: false, lastHeartbeat: null, accountId: null, qmtHost: null, updatedAt: null })
 const emptyAccount = () => ({ totalAsset: 0, available: 0, todayPnl: 0, todayPnlRatio: 0, dailyLossLimitHit: false, updatedAt: null })
 const emptyMarketEnv = () => ({ signal: 'YELLOW', shIndex: null, shMa20: null, shTodayReturn: null, dropDaysIn10: null, updatedAt: null })
-const emptyStrategyParams = () => ({ updatedAt: null })
 const emptySchedule = () => ({ now: null, nextBuy: null, nextSell: null, isWeekend: null, updatedAt: null })
 
 export async function fetchStateMeta() {
@@ -41,8 +40,10 @@ export async function fetchMarketEnv() {
   return fetchOrEmpty(emptyMarketEnv, '/api/market_env')
 }
 
-export async function fetchStrategyParams() {
-  return fetchOrEmpty(emptyStrategyParams, '/api/strategy_params')
+const emptyMarketSentiment = () => ({ label: '情绪正常', avgChange: 0, updatedAt: null })
+
+export async function fetchMarketSentiment() {
+  return fetchOrEmpty(emptyMarketSentiment, '/api/market_sentiment')
 }
 
 export async function fetchHoldings() {

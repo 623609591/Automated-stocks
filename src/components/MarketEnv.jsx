@@ -1,11 +1,11 @@
 import React from 'react'
 import './Card.css'
 
-// 与 QMT.py 大盘环境 6 档信号一致
+// 与 QMT.py 大盘环境 6 档信号一致（当前策略仓位：红灯0%、普通黄灯20%、强黄灯50%、普通绿灯70%、强绿灯75%、超强绿灯85%）
 const SIGNAL_MAP = {
   RED: { label: '红灯', desc: '空仓不买', color: 'var(--red)', icon: '🔴' },
-  YELLOW: { label: '普通黄灯', desc: '50% 仓位', color: 'var(--yellow)', icon: '🟡' },
-  STRONG_YELLOW: { label: '强黄灯', desc: '60% 仓位', color: 'var(--yellow)', icon: '🟡' },
+  YELLOW: { label: '普通黄灯', desc: '20% 仓位', color: 'var(--yellow)', icon: '🟡' },
+  STRONG_YELLOW: { label: '强黄灯', desc: '50% 仓位', color: 'var(--yellow)', icon: '🟡' },
   GREEN: { label: '普通绿灯', desc: '70% 仓位', color: 'var(--green)', icon: '🟢' },
   STRONG_GREEN: { label: '强绿灯', desc: '75% 仓位', color: 'var(--green)', icon: '🟢' },
   SUPER_GREEN: { label: '超强绿灯', desc: '85% 仓位', color: 'var(--green)', icon: '🟢' },

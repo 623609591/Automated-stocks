@@ -279,11 +279,13 @@ def get_env(ContextInfo):
                 else:
                     env_type = "YELLOW"
 
-        # 叠加市场情绪：昨日涨停股今日平均涨跌
+        # 叠加市场情绪：昨日涨停股今日平均涨跌（写入缓存供监控大屏使用）
         try:
             sentiment_label, avg_change = get_market_sentiment(ContextInfo)
+            ContextInfo._last_sentiment = (sentiment_label, avg_change)
         except Exception:
             sentiment_label, avg_change = "情绪正常", 0.0
+            ContextInfo._last_sentiment = (sentiment_label, avg_change)
 
         # 情绪三档：高 / 中 / 低
         if avg_change >= 2.0:
@@ -812,26 +814,43 @@ def _build_dashboard_state(ContextInfo):
     today_pnl = acc.get('today_pnl') or 0.0
     today_pnl_ratio = (today_pnl / total_asset * 100) if total_asset else 0.0
     env_detail = _get_market_env_detail(ContextInfo)
-    hold_codes = getattr(ContextInfo, 'HOLD_CODES', {}) or {}
-    holdings = []
-    for code, info in hold_codes.items():
-        cost = info.get('cost') or 0
-        vol = info.get('volume') or 0
-        if not vol:
-            continue
-        sd = get_stock_data(ContextInfo, code)
-        if sd:
-            price = sd.get('price') or cost
-            name = sd.get('name') or code
-        else:
-            price = cost
-            name = code
-        pnl_ratio = ((price - cost) / cost * 100) if cost else 0
-        holdings.append({
-            "code": code, "name": name, "volume": vol, "costPrice": cost,
-            "currentPrice": round(price, 2), "pnlRatio": round(pnl_ratio, 2)
-        })
+    # 市场情绪：优先用本 bar 已算过的缓存，否则调用一次并缓存
+    cached = getattr(ContextInfo, '_last_sentiment', None)
+    if cached is not None:
+        sentiment_label, sentiment_avg = cached
+    else:
+        try:
+            sentiment_label, sentiment_avg = get_market_sentiment(ContextInfo)
+            ContextInfo._last_sentiment = (sentiment_label, sentiment_avg)
+        except Exception:
+            sentiment_label, sentiment_avg = "情绪正常", 0.0
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
+    holdings = []
+    if accid:
+        try:
+            pos_list = get_trade_detail_data(accid, 'stock', 'position')
+            for obj in pos_list or []:
+                code = getattr(obj, 'm_strInstrumentID', '') or ''
+                if not code:
+                    continue
+                vol = int(getattr(obj, 'm_nVolume', 0) or 0)
+                cost = float(getattr(obj, 'm_dOpenPrice', 0) or 0)
+                if vol <= 0:
+                    continue
+                sd = get_stock_data(ContextInfo, code)
+                if sd:
+                    price = sd.get('price') or cost
+                    name = sd.get('name') or code
+                else:
+                    price = cost
+                    name = code
+                pnl_ratio = ((price - cost) / cost * 100) if cost else 0
+                holdings.append({
+                    "code": code, "name": name, "volume": vol, "costPrice": cost,
+                    "currentPrice": round(price, 2), "pnlRatio": round(pnl_ratio, 2)
+                })
+        except Exception as e:
+            _qmt_log(ContextInfo, "写入监控状态时查询持仓失败: %s" % str(e))
     account_id_display = ("****" + str(accid)[-4:]) if accid and len(str(accid)) >= 4 else "****"
     state = {
         "updated_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -849,29 +868,9 @@ def _build_dashboard_state(ContextInfo):
             "dailyLossLimitHit": total_asset > 0 and (today_pnl / total_asset <= -0.02),
         },
         "market_env": env_detail,
-        "strategy_params": {
-            "maxPositionGreen": MAX_POSITION_GREEN,
-            "maxPositionYellow": MAX_POSITION_YELLOW,
-            "maxStocks": MAX_STOCKS_GREEN,
-            "minBuyVolume": MIN_BUY_VOLUME,
-            "maxDailyLossRatio": MAX_DAILY_LOSS_RATIO,
-            "buyTime": "%02d:%02d" % (BUY_HOUR, BUY_MINUTE),
-            "sellStart": "%02d:%02d" % (SELL_START_HOUR, SELL_START_MIN),
-            "sellEnd": "%02d:%02d" % (SELL_END_HOUR, SELL_END_MIN),
-            "takeProfit": TAKE_PROFIT_1,
-            "stopLoss": "成本-1.5×ATR(14)",
-            "minPrice": MIN_PRICE,
-            "maxPrice": MAX_PRICE,
-            "minRise": MIN_RISE,
-            "maxRise": MAX_RISE,
-            "positionTiers": [
-                {"signal": "SUPER_GREEN", "label": "超强绿灯", "position": MAX_POSITION_SUPER_GREEN, "maxStocks": MAX_STOCKS_SUPER_GREEN},
-                {"signal": "STRONG_GREEN", "label": "强绿灯", "position": MAX_POSITION_STRONG_GREEN, "maxStocks": MAX_STOCKS_STRONG_GREEN},
-                {"signal": "GREEN", "label": "普通绿灯", "position": MAX_POSITION_GREEN, "maxStocks": MAX_STOCKS_GREEN},
-                {"signal": "STRONG_YELLOW", "label": "强黄灯", "position": MAX_POSITION_STRONG_YELLOW, "maxStocks": MAX_STOCKS_STRONG_YELLOW},
-                {"signal": "YELLOW", "label": "普通黄灯", "position": MAX_POSITION_YELLOW, "maxStocks": MAX_STOCKS_YELLOW},
-                {"signal": "RED", "label": "红灯", "position": MAX_POSITION_RED, "maxStocks": 0},
-            ],
+        "market_sentiment": {
+            "label": sentiment_label,
+            "avgChange": round(sentiment_avg, 2),
         },
         "holdings": holdings,
         "trades": [],
@@ -986,10 +985,13 @@ def get_market_sentiment(ContextInfo):
     limit_up_stocks = []
     cnt_no_k, cnt_k_len, cnt_fail_cmp = 0, 0, 0
     MIN_RISE_LIMIT = 9.5   # 昨日涨幅 >= 9.5% 视为涨停（主板/创业板/科创板）
+    total = len(stock_list)
 
-    for stock in stock_list:
+    for i, stock in enumerate(stock_list):
         if not stock or not isinstance(stock, str):
             continue
+        if (i + 1) % 500 == 0 or i == 0:
+            _qmt_log(ContextInfo, "[情绪] 遍历进度：%d/%d，昨日涨停 %d 只" % (i + 1, total, len(limit_up_stocks)))
         try:
             k = _qmt_get_market_data(ContextInfo, ["close"], [stock], period="1d", count=3)
             if not k or stock not in k:

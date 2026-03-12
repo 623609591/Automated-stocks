@@ -6,7 +6,7 @@ from strategy_state_reader import (
     get_connection_status_from_state,
     get_account_overview_from_state,
     get_market_env_from_state,
-    get_strategy_params_from_state,
+    get_market_sentiment_from_state,
     get_holdings_from_state,
     get_trade_history_from_state,
     get_next_schedule_from_state,
@@ -56,34 +56,13 @@ def get_market_env():
     return {"signal": "YELLOW", "shIndex": None, "shMa20": None, "shTodayReturn": None, "dropDaysIn10": None, "updatedAt": None}
 
 
-def _empty_strategy_params():
-    return {
-        "maxPositionGreen": 0,
-        "maxPositionYellow": 0,
-        "maxStocks": 0,
-        "minBuyVolume": 0,
-        "maxDailyLossRatio": 0,
-        "buyTime": "-",
-        "sellStart": "-",
-        "sellEnd": "-",
-        "takeProfit": 0,
-        "stopLoss": 0,
-        "minPrice": 0,
-        "maxPrice": 0,
-        "minRise": 0,
-        "maxRise": 0,
-        "positionTiers": [],
-        "updatedAt": None,
-    }
-
-
-def get_strategy_params():
+def get_market_sentiment():
     state, updated_at = get_state()
     if state:
-        r = get_strategy_params_from_state(state)
+        r = get_market_sentiment_from_state(state)
         if r is not None:
             return _with_updated_at(r, updated_at)
-    return _empty_strategy_params()
+    return {"label": "情绪正常", "avgChange": 0.0, "updatedAt": None}
 
 
 def get_holdings():

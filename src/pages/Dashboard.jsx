@@ -3,9 +3,8 @@ import dayjs from 'dayjs'
 import ConnectionStatus from '../components/ConnectionStatus'
 import AccountOverview from '../components/AccountOverview'
 import MarketEnv from '../components/MarketEnv'
-import StrategyParams from '../components/StrategyParams'
+import MarketSentiment from '../components/MarketSentiment'
 import HoldingsTable from '../components/HoldingsTable'
-import NextSchedule from '../components/NextSchedule'
 import * as api from '../api'
 import './Dashboard.css'
 
@@ -13,30 +12,27 @@ export default function Dashboard() {
   const [connection, setConnection] = useState(null)
   const [account, setAccount] = useState(null)
   const [marketEnv, setMarketEnv] = useState(null)
-  const [params, setParams] = useState(null)
+  const [marketSentiment, setMarketSentiment] = useState(null)
   const [holdings, setHoldings] = useState(null)
-  const [schedule, setSchedule] = useState(null)
   const [updatedAt, setUpdatedAt] = useState(null)
   const [loading, setLoading] = useState(true)
 
   const refresh = async () => {
     try {
-      const [meta, conn, acc, env, prm, pos, sch] = await Promise.all([
+      const [meta, conn, acc, env, sentiment, pos] = await Promise.all([
         api.fetchStateMeta(),
         api.fetchConnectionStatus(),
         api.fetchAccountOverview(),
         api.fetchMarketEnv(),
-        api.fetchStrategyParams(),
+        api.fetchMarketSentiment(),
         api.fetchHoldings(),
-        api.fetchNextSchedule(),
       ])
       setUpdatedAt(meta?.updatedAt ?? null)
       setConnection(conn)
       setAccount(acc)
       setMarketEnv(env)
-      setParams(prm)
+      setMarketSentiment(sentiment)
       setHoldings(pos)
-      setSchedule(sch)
     } catch (e) {
       console.error(e)
     } finally {
@@ -79,8 +75,7 @@ export default function Dashboard() {
         <ConnectionStatus data={connection} />
         <AccountOverview data={account} />
         <MarketEnv data={marketEnv} />
-        <NextSchedule data={schedule} />
-        <StrategyParams data={params} />
+        <MarketSentiment data={marketSentiment} />
         <HoldingsTable data={holdings} />
       </div>
     </div>
