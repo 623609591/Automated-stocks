@@ -1,9 +1,10 @@
 #coding:gbk
 # -*- coding: utf-8 -*-
 """适配国金QMT极速策略交易系统 Python API（Python3）"""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import pandas as pd
 import warnings
+import time
 warnings.filterwarnings('ignore')
 
 # ===================== 核心配置（仅需修改这里） =====================
@@ -227,45 +228,88 @@ def init_global_vars(ContextInfo):
 
 # ===================== 当前大盘环境判断（适配 QMT） =====================
 def get_env(ContextInfo):
+    """
+    返回 (环境信号, 最大仓位比例)。
+    环境信号：基于上证指数 20 日均线与近期表现（红/绿/黄灯）。
+    仓位比例：在环境基础上叠加市场情绪（昨日涨停股今日平均涨跌）三档调整：
+      - 情绪高（avg_change ≥ 2%）
+      - 情绪中（-1% ≤ avg_change < 2%）
+      - 情绪低（avg_change < -1%）
+    不同环境 + 情绪档位的仓位配置：
+      SUPER_GREEN : 1.00, 0.85, 0.425
+      STRONG_GREEN: 0.90, 0.75, 0.375
+      GREEN       : 0.84, 0.70, 0.35
+      STRONG_YELLOW:0.60, 0.50, 0.25
+      YELLOW      : 0.24, 0.20, 0.10
+      RED         : 0.00, 0.00, 0.00
+    """
     sh = "000001.SH"
     try:
         k_data = _qmt_get_market_data(ContextInfo, ['close'], [sh], period='1d', count=21)
         if not k_data or sh not in k_data or len(k_data[sh]['close']) < 21:
-            return "YELLOW", MAX_POSITION_YELLOW
-        close_list = k_data[sh]['close']
-        close_list = close_list[-21:]  # 取 21 根，shift(1)+dropna 后剩 20 行，才能满足 len(k_df)>=20
-        k_df = pd.DataFrame({'close': close_list})
-        k_df['pre_close'] = k_df['close'].shift(1)
-        k_df = k_df.dropna()
-        if len(k_df) < 20:
-            return "YELLOW", MAX_POSITION_YELLOW
-        k_df['ma20'] = k_df['close'].rolling(20).mean()
-        close = k_df['close'].iloc[-1]
-        ma20 = k_df['ma20'].iloc[-1]
-        pre = k_df['pre_close'].iloc[-1]
-        today_r = (close / pre - 1) * 100
-        recent_10 = k_df.iloc[-10:]
-        recent_10 = recent_10.copy()
-        recent_10['rise'] = (recent_10['close'] / recent_10['pre_close'] - 1) * 100
-        drop10 = len(recent_10[recent_10['rise'] <= -1])
-        if close < ma20 or today_r <= -1.5 or drop10 >= 3:
-            _qmt_log(ContextInfo, "🔴 红灯 → 空仓不买")
-            return "RED", MAX_POSITION_RED
-        if close > ma20 and today_r >= 1.5 and drop10 <= 0:
-            _qmt_log(ContextInfo, "🟢 超强绿灯 → 80%仓位")
-            return "SUPER_GREEN", MAX_POSITION_SUPER_GREEN
-        elif close > ma20 and today_r >= 1.0 and drop10 <= 0:
-            _qmt_log(ContextInfo, "🟢 强绿灯 → 70%仓位")
-            return "STRONG_GREEN", MAX_POSITION_STRONG_GREEN
-        elif close > ma20 and today_r >= 0.5 and drop10 <= 1:
-            _qmt_log(ContextInfo, "🟢 普通绿灯 → 60%仓位")
-            return "GREEN", MAX_POSITION_GREEN
-        elif close > ma20 and today_r >= 0 and drop10 <= 1:
-            _qmt_log(ContextInfo, "🟡 强黄灯 → 55%仓位")
-            return "STRONG_YELLOW", MAX_POSITION_STRONG_YELLOW
+            env_type = "YELLOW"
         else:
-            _qmt_log(ContextInfo, "🟡 普通黄灯 → 20%%仓位")
-            return "YELLOW", MAX_POSITION_YELLOW
+            close_list = k_data[sh]['close'][-21:]
+            k_df = pd.DataFrame({'close': close_list})
+            k_df['pre_close'] = k_df['close'].shift(1)
+            k_df = k_df.dropna()
+            if len(k_df) < 20:
+                env_type = "YELLOW"
+            else:
+                k_df['ma20'] = k_df['close'].rolling(20).mean()
+                close = k_df['close'].iloc[-1]
+                ma20 = k_df['ma20'].iloc[-1]
+                pre = k_df['pre_close'].iloc[-1]
+                today_r = (close / pre - 1) * 100
+                recent_10 = k_df.iloc[-10:].copy()
+                recent_10['rise'] = (recent_10['close'] / recent_10['pre_close'] - 1) * 100
+                drop10 = len(recent_10[recent_10['rise'] <= -1])
+
+                # 先只根据指数 K 线判断环境灯色
+                if close < ma20 or today_r <= -1.5 or drop10 >= 3:
+                    env_type = "RED"
+                elif close > ma20 and today_r >= 1.5 and drop10 <= 0:
+                    env_type = "SUPER_GREEN"
+                elif close > ma20 and today_r >= 1.0 and drop10 <= 0:
+                    env_type = "STRONG_GREEN"
+                elif close > ma20 and today_r >= 0.5 and drop10 <= 1:
+                    env_type = "GREEN"
+                elif close > ma20 and today_r >= 0 and drop10 <= 1:
+                    env_type = "STRONG_YELLOW"
+                else:
+                    env_type = "YELLOW"
+
+        # 叠加市场情绪：昨日涨停股今日平均涨跌
+        try:
+            sentiment_label, avg_change = get_market_sentiment(ContextInfo)
+        except Exception:
+            sentiment_label, avg_change = "情绪正常", 0.0
+
+        # 情绪三档：高 / 中 / 低
+        if avg_change >= 2.0:
+            sentiment_band = "HIGH"
+        elif avg_change <= -1.0:
+            sentiment_band = "LOW"
+        else:
+            sentiment_band = "MID"
+
+        sentiment_position_map = {
+            "SUPER_GREEN": {"HIGH": 1.00, "MID": 0.85, "LOW": 0.425},
+            "STRONG_GREEN": {"HIGH": 0.90, "MID": 0.75, "LOW": 0.375},
+            "GREEN": {"HIGH": 0.84, "MID": 0.70, "LOW": 0.35},
+            "STRONG_YELLOW": {"HIGH": 0.60, "MID": 0.50, "LOW": 0.25},
+            "YELLOW": {"HIGH": 0.24, "MID": 0.20, "LOW": 0.10},
+            "RED": {"HIGH": 0.00, "MID": 0.00, "LOW": 0.00},
+        }
+        band_map = sentiment_position_map.get(env_type, sentiment_position_map["YELLOW"])
+        position_ratio = band_map.get(sentiment_band, MAX_POSITION_YELLOW)
+
+        _qmt_log(
+            ContextInfo,
+            "环境=%s, 情绪=%s(avg=%.2f%%), 情绪档位=%s, 最大仓位=%.1f%%"
+            % (env_type, sentiment_label, avg_change, sentiment_band, position_ratio * 100.0),
+        )
+        return env_type, position_ratio
     except Exception as e:
         _qmt_log(ContextInfo, "⚠️ 环境判断出错：%s，默认黄灯" % str(e))
         return "YELLOW", MAX_POSITION_YELLOW
@@ -428,6 +472,7 @@ def get_stock_data(ContextInfo, code):
 
 # ===================== 选股操作 =====================
 def select_stocks(ContextInfo, env_type):
+    _qmt_log(ContextInfo, "选股：环境类型111：%s" % env_type)
     max_stocks = {
         'SUPER_GREEN': MAX_STOCKS_SUPER_GREEN,
         'STRONG_GREEN': MAX_STOCKS_STRONG_GREEN,
@@ -570,6 +615,7 @@ def buy_stocks(ContextInfo):
         return
     #获取环境类型和仓位比例
     env_type, position_ratio = get_env(ContextInfo)
+    _qmt_log(ContextInfo, "环境类型：%s，仓位比例：%.2f" % (env_type, position_ratio))
     if env_type == "RED":
         _qmt_log(ContextInfo, "红灯环境，不买入")
         return
@@ -875,6 +921,126 @@ def _sync_hold_from_account(ContextInfo):
             _qmt_log(ContextInfo, "已从账户同步持仓 %d 只：%s" % (len(ContextInfo.HOLD_CODES), list(ContextInfo.HOLD_CODES.keys())))
     except Exception as e:
         _qmt_log(ContextInfo, "同步账户持仓失败：%s" % str(e))
+
+
+def get_last_trading_day(ContextInfo):
+    """获取上一个交易日（不含今日），跳过周末。返回 YYYYMMDD 字符串或 date，供 get_history_data 等使用。"""
+    try:
+        # 优先用 QMT 当前交易日；若不存在或异常则用本地日期
+        t = getattr(ContextInfo, 'get_trading_day', None)
+        if callable(t):
+            today = t()
+        else:
+            today = None
+        if today is None:
+            today = date.today()
+        # 统一转为 date
+        if isinstance(today, date):
+            d = today
+        elif isinstance(today, datetime):
+            d = today.date()
+        elif isinstance(today, str):
+            s = today.replace('-', '').replace('/', '').strip()
+            if len(s) >= 8:
+                d = date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+            else:
+                d = date.today()
+        else:
+            d = date.today()
+        # 向前推 1 日，若为周末则继续向前到周五
+        prev = d - timedelta(days=1)
+        while prev.weekday() >= 5:  # 5=周六 6=周日
+            prev -= timedelta(days=1)
+        # 返回 YYYYMMDD，与常见行情接口一致
+        return prev.strftime('%Y%m%d')
+    except Exception as e:
+        try:
+            _qmt_log(ContextInfo, "⚠️ get_last_trading_day 异常：%s，使用昨日日期" % str(e))
+        except Exception:
+            pass
+        fallback = date.today() - timedelta(days=1)
+        while fallback.weekday() >= 5:
+            fallback -= timedelta(days=1)
+        return fallback.strftime('%Y%m%d')
+
+
+
+def get_market_sentiment(ContextInfo):
+    """
+    以昨日涨停股票为样本，计算其今日平均涨跌幅，判断市场情绪。
+    情绪三档（按平均涨跌幅 avg_change 划分）：
+      - avg_change ≥ 2%       → 情绪高涨
+      - -1% ≤ avg_change < 2% → 情绪正常
+      - avg_change < -1%      → 情绪冰点
+    返回: (情绪标签, avg_change)
+    """
+    try:
+        stock_list = ContextInfo.get_stock_list_in_sector("沪深A股")
+        if not stock_list:
+            return "情绪正常", 0.0
+        stock_list = list(stock_list) if not isinstance(stock_list, list) else stock_list
+    except Exception:
+        return "情绪正常", 0.0
+
+    # 筛选昨日涨停：直接看昨日涨幅是否 >= 9.5%
+    limit_up_stocks = []
+    cnt_no_k, cnt_k_len, cnt_fail_cmp = 0, 0, 0
+    MIN_RISE_LIMIT = 9.5   # 昨日涨幅 >= 9.5% 视为涨停（主板/创业板/科创板）
+
+    for stock in stock_list:
+        if not stock or not isinstance(stock, str):
+            continue
+        try:
+            k = _qmt_get_market_data(ContextInfo, ["close"], [stock], period="1d", count=3)
+            if not k or stock not in k:
+                cnt_no_k += 1
+                continue
+            if "close" not in k[stock] or len(k[stock]["close"]) < 3:
+                cnt_k_len += 1
+                continue
+            closes = k[stock]["close"]
+            prev_close = float(closes[-3])      # 前日收
+            yesterday_close = float(closes[-2])  # 昨收
+            if prev_close <= 0:
+                continue
+            yesterday_rise = (yesterday_close - prev_close) / prev_close * 100
+            if yesterday_rise >= MIN_RISE_LIMIT:
+                limit_up_stocks.append(stock)
+            else:
+                cnt_fail_cmp += 1
+        except Exception as e:
+            if cnt_no_k + cnt_k_len + cnt_fail_cmp < 3:
+                _qmt_log(ContextInfo, "[情绪] 循环异常 %s: %s" % (stock, str(e)))
+            continue
+    if not limit_up_stocks:
+        return "情绪正常", 0.0
+
+    # 昨日涨停股今日涨跌幅：取 count=3，close[-2]=昨收，close[-1]=今收
+    total_change = 0.0
+    valid_count = 0
+    for stock in limit_up_stocks:
+        try:
+            k = _qmt_get_market_data(ContextInfo, ["close"], [stock], period="1d", count=3)
+            if not k or stock not in k or "close" not in k[stock] or len(k[stock]["close"]) < 2:
+                continue
+            prev_close = float(k[stock]["close"][-2])
+            current_price = float(k[stock]["close"][-1])
+            if prev_close <= 0:
+                continue
+            change_pct = (current_price - prev_close) / prev_close * 100
+            total_change += change_pct
+            valid_count += 1
+        except Exception:
+            continue
+    if valid_count == 0:
+        return "情绪正常", 0.0
+    avg_change = total_change / valid_count
+    if avg_change >= 2.0:
+        return "情绪高涨", avg_change
+    if avg_change <= -1.0:
+        return "情绪冰点", avg_change
+    return "情绪正常", avg_change
+
 
 # ===================== 初始化函数 =====================
 def init(ContextInfo):
