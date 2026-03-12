@@ -18,8 +18,8 @@ ACCOUNT_ID = '8885733900' # 资金账号
 MAX_POSITION_SUPER_GREEN = 0.85   # 超强绿灯 → 85%
 MAX_POSITION_STRONG_GREEN = 0.75  # 强绿灯 → 75%
 MAX_POSITION_GREEN = 0.70         # 普通绿灯 → 70%
-MAX_POSITION_STRONG_YELLOW = 0.60 # 强黄灯 → 60%
-MAX_POSITION_YELLOW = 0.50        # 普通黄灯 → 50%
+MAX_POSITION_STRONG_YELLOW = 0.50 # 强黄灯 → 50%
+MAX_POSITION_YELLOW = 0.40        # 普通黄灯 → 40%
 MAX_POSITION_RED = 0.00           # 红灯 → 0%
 
 # 持仓数量限制
@@ -51,7 +51,7 @@ STOP_LOSS_EARLY = -1.0 # 亏损≤-1%且量比<1提前止损
 SELL_CUTOFF_TIME = 10*60 + 15     # 10:15前未冲高卖出
 
 # 交易时间
-BUY_HOUR, BUY_MINUTE = 14, 50    # 14:55-14:57买入
+BUY_HOUR, BUY_MINUTE = 11, 22    # 14:55-14:57买入
 SELL_START_HOUR, SELL_START_MIN = 9, 30  # 9:30开始卖出
 SELL_END_HOUR, SELL_END_MIN = 10, 30     # 10:30前必须卖完
 
@@ -68,6 +68,7 @@ DASHBOARD_STATE_PATH = _os.environ.get("DASHBOARD_STATE_PATH", _default_path)
 
 # ===================== QMT API 适配层 =====================
 
+# ===================== 接收数据 =====================
 def _qmt_get_market_data(ContextInfo, fields, stock_code, period='1d', count=-1):
     """
     兼容 QMT 多种返回格式：DataFrame/Series（按日期或代码为索引）或 dict{code: data}。
@@ -210,6 +211,7 @@ def _qmt_get_market_data(ContextInfo, fields, stock_code, period='1d', count=-1)
         print(traceback.format_exc())
         return {}
 
+# ===================== 日志打印方法 =====================
 def _qmt_log(ContextInfo, msg):
     """QMT 无 log 时用 print"""
     try:
@@ -219,13 +221,11 @@ def _qmt_log(ContextInfo, msg):
 
 # 全局变量（策略编辑器用ContextInfo存储）
 def init_global_vars(ContextInfo):
-    """初始化全局变量"""
     ContextInfo.HOLD_CODES = {}  # 持仓股: {成本价, 持仓数量}
     ContextInfo._buy_done_date = None   # 当日已执行买入的日期，避免重复
 
-# ===================== 大盘环境判断（适配 QMT） =====================
+# ===================== 当前大盘环境判断（适配 QMT） =====================
 def get_env(ContextInfo):
-    """判断大盘环境，返回环境类型和对应仓位"""
     sh = "000001.SH"
     try:
         k_data = _qmt_get_market_data(ContextInfo, ['close'], [sh], period='1d', count=21)
@@ -269,9 +269,8 @@ def get_env(ContextInfo):
         _qmt_log(ContextInfo, "⚠️ 环境判断出错：%s，默认黄灯" % str(e))
         return "YELLOW", MAX_POSITION_YELLOW
 
-# ===================== 账户数据获取（QMT：get_trade_detail_data） =====================
+# ===================== 获取当前时间的账户信息(总资产，当日盈亏) =====================
 def get_account_info(ContextInfo):
-    """获取账户总资产和当日盈亏（QMT 用 get_trade_detail_data(accountID,'stock','account')）"""
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
     if not accid:
         return {'total_asset': INIT_CAPITAL, 'today_pnl': 0.0, 'cash': 0.0}
@@ -288,8 +287,8 @@ def get_account_info(ContextInfo):
         _qmt_log(ContextInfo, "⚠️ 获取账户信息失败：%s" % str(e))
         return {'total_asset': INIT_CAPITAL, 'today_pnl': 0.0, 'cash': 0.0}
 
+# ===================== 获取单个股持仓信息（QMT：get_trade_detail_data position） =====================
 def get_stock_position(ContextInfo, code):
-    """获取个股持仓（QMT 用 get_trade_detail_data 的 position，按 m_strInstrumentID 匹配）"""
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
     if not accid:
         return {'volume': 0, 'can_use': 0, 'cost': 0.0}
@@ -308,30 +307,8 @@ def get_stock_position(ContextInfo, code):
         _qmt_log(ContextInfo, "⚠️ 获取%s持仓失败：%s" % (code, str(e)))
         return {'volume': 0, 'can_use': 0, 'cost': 0.0}
 
-# ===================== 选股模块（适配 QMT 行情与合约接口） =====================
-def get_board_rate(ContextInfo, code):
-    """涨停开板率（QMT 用 get_full_tick + get_instrumentdetail 的 UpStopPrice）"""
-    try:
-        tick_data = ContextInfo.get_full_tick(stock_code=[code])
-        if not tick_data or code not in tick_data:
-            return 1.0
-        tick = tick_data[code]
-        last_price = float(tick.get('lastPrice', 0) or tick.get('lastClose', 0))
-        detail = ContextInfo.get_instrumentdetail(code)
-        if not detail or not isinstance(detail, dict):
-            return 1.0
-        limit_up = float(detail.get('UpStopPrice', 0) or 0)
-        if limit_up <= 0:
-            return 1.0
-        if last_price < limit_up:
-            return 0.0
-        return 0.0 if last_price >= limit_up else 0.2
-    except Exception as e:
-        _qmt_log(ContextInfo, "⚠️ 获取%s开板率失败：%s" % (code, str(e)))
-        return 1.0
-
+# ===================== 获取单个股最新市场数据 =====================
 def get_stock_data(ContextInfo, code):
-    """获取个股核心数据（QMT：get_market_data 字段可能无 vol_ratio/turnover/float_mktcap/net_main_inflow，用可获字段近似）"""
     try:
         # 账户同步的 code 可能无后缀，QMT 行情接口要求 600509.SH / 000001.SZ 等格式
         if isinstance(code, str) and code and '.' not in code:
@@ -424,8 +401,8 @@ def get_stock_data(ContextInfo, code):
         _qmt_log(ContextInfo, "⚠️ 获取%s数据失败：%s" % (code, str(e)))
         return None
 
+# ===================== 选股操作 =====================
 def select_stocks(ContextInfo, env_type):
-    """选股：按综合评分排序（QMT：get_stock_list_in_sector）"""
     max_stocks = {
         'SUPER_GREEN': MAX_STOCKS_SUPER_GREEN,
         'STRONG_GREEN': MAX_STOCKS_STRONG_GREEN,
@@ -434,6 +411,7 @@ def select_stocks(ContextInfo, env_type):
         'YELLOW': MAX_STOCKS_YELLOW,
         'RED': 0
     }.get(env_type, 0)
+    #红灯环境，不选股
     if max_stocks == 0:
         return []
     try:
@@ -452,6 +430,7 @@ def select_stocks(ContextInfo, env_type):
     no_data_count = 0
     fail_reasons = {'price': 0, 'rise': 0, 'vol_ratio': 0, 'turn': 0, 'cap': 0, 'ma': 0, 'st': 0}
     fail_examples = []
+    #遍历待筛选股票，过滤筛选条件
     for i, code in enumerate(to_scan):
         if (i + 1) % 500 == 0 or i == 0:
             _qmt_log(ContextInfo, "选股进度：%d/%d，已得有效 %d 只" % (i + 1, total, len(valid_stocks)))
@@ -504,10 +483,6 @@ def select_stocks(ContextInfo, env_type):
     _qmt_log(ContextInfo, "未通过条件统计(同一只可能触达多条件): price=%d rise=%d vol_ratio=%d turn=%d cap=%d ma=%d ST=%d" % (
         fail_reasons['price'], fail_reasons['rise'], fail_reasons['vol_ratio'], fail_reasons['turn'],
         fail_reasons['cap'], fail_reasons['ma'], fail_reasons['st']))
-    for code, name, reasons, d in fail_examples:
-        _qmt_log(ContextInfo, "  示例未通过: %s %s | 原因: %s | 价=%.2f 涨=%.2f%% 量比=%.2f 换手=%.2f 市值=%.0f亿 ma5=%.2f ma10=%.2f ma20=%.2f 成交额=%.0f" % (
-            code, name, ','.join(reasons), d.get('price', 0), d.get('rise', 0), d.get('vol_ratio', 0), d.get('turn', 0),
-            d.get('cap', 0) / 1e8, d.get('ma5', 0), d.get('ma10', 0), d.get('ma20', 0), d.get('amount', 0)))
     _qmt_log(ContextInfo, "有效股票（%d只）：%s" % (len(valid_stocks), [s['code'] for s in valid_stocks]))
     valid_stocks.sort(key=lambda x: x['score'], reverse=True)
     selected = valid_stocks[:max_stocks]
@@ -516,8 +491,7 @@ def select_stocks(ContextInfo, env_type):
         _qmt_log(ContextInfo, "   %s %s - 评分：%.0f 涨幅：%.2f%%" % (stock['code'], stock['name'], stock['score'], stock['rise']))
     return selected
 
-# ===================== 交易执行（QMT：passorder） =====================
-# 格式：passorder(opType, orderType, accountid, orderCode, prType, modelprice, volume, '', 1, '', ContextInfo)
+# ===================== 买入交易函数（QMT：passorder） =====================
 def buy_stock(ContextInfo, code, volume, price):
     """买入（单股单账号股票最新价）"""
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
@@ -531,7 +505,7 @@ def buy_stock(ContextInfo, code, volume, price):
     except Exception as e:
         _qmt_log(ContextInfo, "❌ 买入 %s 失败：%s" % (code, str(e)))
         return False
-
+# ===================== 卖出交易函数 =====================
 def sell_stock(ContextInfo, code, volume, price):
     """卖出（单股单账号股票最新价）"""
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
@@ -546,31 +520,40 @@ def sell_stock(ContextInfo, code, volume, price):
         _qmt_log(ContextInfo, "❌ 卖出 %s 失败：%s" % (code, str(e)))
         return False
 
+# ===================== 买入执行（QMT：buy_stocks） =====================
 def buy_stocks(ContextInfo):
-    """买入执行（梯度仓位+资金优化分配）"""
-    env_type, position_ratio = get_env(ContextInfo)
-    if env_type == "RED":
-        print("红灯环境，不买入")
-        return
+    today = datetime.now().date()
+    #获取账户信息
     account = get_account_info(ContextInfo)
+    #获取账户总资产和今日盈亏
     total_asset = account['total_asset']
     today_pnl = account['today_pnl']
     if today_pnl <= -total_asset * MAX_DAILY_LOSS_CLEAR:
         _qmt_log(ContextInfo, "⚠️ 当日亏损超2%%，强制清仓！")
         sell_all_positions(ContextInfo)
+        ContextInfo._buy_done_date = today  # 当日不再尝试买入
         return
     if today_pnl <= -total_asset * MAX_DAILY_LOSS_RATIO:
         _qmt_log(ContextInfo, "⚠️ 当日亏损超1.5%%，停止买入")
         return
+    # 今日已执行过买入则不再重复下单（强制清仓/停止买入仍会在上面每次检查）
+    if getattr(ContextInfo, '_buy_done_date', None) == today:
+        return
+    #获取环境类型和仓位比例
+    env_type, position_ratio = get_env(ContextInfo)
+    if env_type == "RED":
+        _qmt_log(ContextInfo, "红灯环境，不买入")
+        return
+    #执行选股操作
     selected_stocks = select_stocks(ContextInfo, env_type)
-    print("选股结果：" + str(selected_stocks))
+    _qmt_log(ContextInfo, "选股结果：" + str(selected_stocks))
     if not selected_stocks:
-        _qmt_log(ContextInfo, "❌ 无符合条件股票")
+        _qmt_log(ContextInfo, "无符合条件股票")
         return
     buy_capital = total_asset * position_ratio
     stock_count = len(selected_stocks)
     if stock_count == 0:
-        print("无符合条件股票，不买入")
+        _qmt_log(ContextInfo, "无符合条件股票，不买入")
         return
     _qmt_log(ContextInfo, "\n💰 账户总资产：%.0f元，可买金额：%.0f元" % (total_asset, buy_capital))
     buy_amounts = []
@@ -592,7 +575,9 @@ def buy_stocks(ContextInfo):
             continue
         if buy_stock(ContextInfo, code, volume, price):
             ContextInfo.HOLD_CODES[code] = {'cost': price, 'volume': volume}
+    ContextInfo._buy_done_date = today  # 已执行买入，避免当日重复下单
 
+# ===================== 卖出执行（QMT：sell_stocks） =====================
 def sell_stocks(ContextInfo):
     #若没有持仓，则不卖出
     if not getattr(ContextInfo, 'HOLD_CODES', None):
@@ -607,7 +592,6 @@ def sell_stocks(ContextInfo):
             continue
         #获取当前股票当前市场价格数据
         data = get_stock_data(ContextInfo, code)
-        print("data: " + str(data))
         #若股票数据为空，则最新价格卖出持仓全部
         if not data:
             sell_stock(ContextInfo, code, pos['can_use'], 0.0)
@@ -684,9 +668,10 @@ def sell_stocks(ContextInfo):
                 if code in getattr(ContextInfo, 'HOLD_CODES', {}):
                     del ContextInfo.HOLD_CODES[code]
 
+# ===================== 强制清仓（QMT：get_trade_detail_data position 逐只卖出） =====================
 def sell_all_positions(ContextInfo):
     """强制清仓（QMT：get_trade_detail_data position 逐只卖出）"""
-    _qmt_log(ContextInfo, "⚠️ 执行强制清仓")
+    _qmt_log(ContextInfo, "执行强制清仓")
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
     if not accid:
         ContextInfo.HOLD_CODES = {}
@@ -705,7 +690,6 @@ def sell_all_positions(ContextInfo):
 
 # ===================== 监控大屏状态导出（供本项目后端读取） =====================
 def _get_market_env_detail(ContextInfo):
-    """获取大盘环境详情，与 get_env 逻辑一致，返回前端所需字段"""
     sh = "000001.SH"
     try:
         k_data = _qmt_get_market_data(ContextInfo, ['close'], [sh], period='1d', count=21)
@@ -731,9 +715,8 @@ def _get_market_env_detail(ContextInfo):
     except Exception:
         return {"signal": "YELLOW", "shIndex": 0, "shMa20": 0, "shTodayReturn": 0, "dropDaysIn10": 0}
 
-
+# ===================== 组装与前端/后端 mock_data 一致的状态结构 =====================
 def _build_dashboard_state(ContextInfo):
-    """组装与前端/后端 mock_data 一致的状态结构"""
     now = datetime.now()
     acc = get_account_info(ContextInfo)
     total_asset = acc.get('total_asset') or INIT_CAPITAL
@@ -815,9 +798,8 @@ def _build_dashboard_state(ContextInfo):
     }
     return state
 
-
+# ===================== 将当前策略状态写入状态文件，供本项目后端 API 读取并展示到监控大屏 =====================
 def write_state_to_dashboard(ContextInfo):
-    """将当前策略状态写入状态文件，供本项目后端 API 读取并展示到监控大屏"""
     if not DASHBOARD_STATE_PATH or not DASHBOARD_STATE_PATH.strip():
         return
     try:
@@ -826,10 +808,10 @@ def write_state_to_dashboard(ContextInfo):
         with open(DASHBOARD_STATE_PATH.strip(), 'w', encoding='utf-8') as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        _qmt_log(ContextInfo, "⚠️ 写入监控状态文件失败: %s" % str(e))
+        _qmt_log(ContextInfo, "写入监控状态文件失败: %s" % str(e))
 
+# ===================== 从账户实际持仓同步到 HOLD_CODES，重启策略后能识别已有持仓 =====================
 def _sync_hold_from_account(ContextInfo):
-    """从账户实际持仓同步到 HOLD_CODES，重启策略后能识别已有持仓"""
     accid = getattr(ContextInfo, 'accid', None) or ACCOUNT_ID
     if not accid:
         return
@@ -848,22 +830,21 @@ def _sync_hold_from_account(ContextInfo):
                     'volume': volume if volume > 0 else can_use
                 }
         if ContextInfo.HOLD_CODES:
-            _qmt_log(ContextInfo, "✅ 已从账户同步持仓 %d 只：%s" % (len(ContextInfo.HOLD_CODES), list(ContextInfo.HOLD_CODES.keys())))
+            _qmt_log(ContextInfo, "已从账户同步持仓 %d 只：%s" % (len(ContextInfo.HOLD_CODES), list(ContextInfo.HOLD_CODES.keys())))
     except Exception as e:
-        _qmt_log(ContextInfo, "⚠️ 同步账户持仓失败：%s" % str(e))
+        _qmt_log(ContextInfo, "同步账户持仓失败：%s" % str(e))
 
-# 初始化函数
+# ===================== 初始化函数 =====================
 def init(ContextInfo):
-    """策略初始化（QMT 要求：init 与 handlebar 必实现；set_account 绑定资金账号）"""
     init_global_vars(ContextInfo)
     accid = ACCOUNT_ID.strip() or getattr(ContextInfo, 'accid', '')
     if accid:
         ContextInfo.set_account(accid)
         ContextInfo.accid = accid
     _sync_hold_from_account(ContextInfo)
-    _qmt_log(ContextInfo, "✅ 策略初始化完成，等待交易时间触发")
+    _qmt_log(ContextInfo, "策略初始化完成，等待交易时间触发")
 
-# 主循环函数
+# ===================== 主循环函数 =====================
 def handlebar(ContextInfo):
     # 若不是最后一根K线，则不执行
     if not ContextInfo.is_last_bar():
@@ -871,16 +852,13 @@ def handlebar(ContextInfo):
     now = datetime.now()
     if now.weekday() >= 5:
         return
-    today = now.date()
     current_hour = now.hour
     current_minute = now.minute
     current_second = now.second
-    #当前时间是否在BUY_MINUTE和BUY_MINUTE+2之间，并且当前秒数在0-15之间，并且当天没有买入过，满足条件执行买入操作
+    # 买入窗口内每次到点都调用 buy_stocks，以便每次都能执行「当日亏2%强制清仓」检查；是否实际买入由内部 _buy_done_date 控制
     if current_hour == BUY_HOUR and BUY_MINUTE <= current_minute <= BUY_MINUTE + 2:
         if 0 <= current_second <= 15:
-            if getattr(ContextInfo, '_buy_done_date', None) != today:
-                ContextInfo._buy_done_date = today
-                buy_stocks(ContextInfo)
+            buy_stocks(ContextInfo)
     # 卖出窗口内每次 handlebar 都执行卖出逻辑（止盈/止损/10:15未冲高/10:30清仓）
     elif SELL_START_HOUR <= current_hour <= SELL_END_HOUR:
         if (current_hour == SELL_START_HOUR and SELL_START_MIN <= current_minute) or \
