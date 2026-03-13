@@ -15,13 +15,6 @@ ACCOUNT_ID = '8885733900' # 资金账号
 # ==================================================================
 
 # ===================== 策略核心参数（完全保留原逻辑） =====================
-# 仓位配置（梯度仓位，略加以提高资金利用率）
-MAX_POSITION_SUPER_GREEN = 0.85   # 超强绿灯 → 85%
-MAX_POSITION_STRONG_GREEN = 0.75  # 强绿灯 → 75%
-MAX_POSITION_GREEN = 0.70         # 普通绿灯 → 70%
-MAX_POSITION_STRONG_YELLOW = 0.50 # 强黄灯 → 50%
-MAX_POSITION_YELLOW = 0.20        # 普通黄灯 → 20%
-MAX_POSITION_RED = 0.00           # 红灯 → 0%
 
 # 持仓数量限制
 MAX_STOCKS_SUPER_GREEN = 7        # 超强绿灯最多7只
@@ -53,7 +46,7 @@ ATR_STOP_MULT = 1.5    # 止损 = 成本价 - ATR_STOP_MULT * ATR(14)，波动�
 SELL_CUTOFF_TIME = 10*60 + 15     # 10:15前未冲高卖出
 
 # 交易时间
-BUY_HOUR, BUY_MINUTE = 14, 50    # 14:55-14:57买入
+BUY_HOUR, BUY_MINUTE = 14, 55    # 14:55-14:57买入
 SELL_START_HOUR, SELL_START_MIN = 9, 30  # 9:30开始卖出
 SELL_END_HOUR, SELL_END_MIN = 10, 30     # 10:30前必须卖完
 
@@ -304,7 +297,7 @@ def get_env(ContextInfo):
             "RED": {"HIGH": 0.00, "MID": 0.00, "LOW": 0.00},
         }
         band_map = sentiment_position_map.get(env_type, sentiment_position_map["YELLOW"])
-        position_ratio = band_map.get(sentiment_band, MAX_POSITION_YELLOW)
+        position_ratio = band_map.get(sentiment_band, 0.20)
 
         _qmt_log(
             ContextInfo,
@@ -314,7 +307,7 @@ def get_env(ContextInfo):
         return env_type, position_ratio
     except Exception as e:
         _qmt_log(ContextInfo, "⚠️ 环境判断出错：%s，默认黄灯" % str(e))
-        return "YELLOW", MAX_POSITION_YELLOW
+        return "YELLOW", 0.20
 
 # ===================== 获取当前时间的账户信息(总资产，当日盈亏) =====================
 def get_account_info(ContextInfo):
