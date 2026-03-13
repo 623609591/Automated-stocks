@@ -266,15 +266,15 @@ def get_env(ContextInfo):
                 drop10 = len(recent_10[recent_10['rise'] <= -1])
 
                 # 先只根据指数 K 线判断环境灯色
-                if close < ma20 or today_r <= -1.5 or drop10 >= 3:
+                if today_r <= -1.0 or drop10 >= 7:
                     env_type = "RED"
-                elif close > ma20 and today_r >= 1.5 and drop10 <= 0:
+                elif close > ma20 and today_r >= 1.0 and drop10 <= 3:
                     env_type = "SUPER_GREEN"
-                elif close > ma20 and today_r >= 1.0 and drop10 <= 0:
+                elif close > ma20 and today_r >= 0.5 and today_r <= 1.0 and drop10 <= 4:
                     env_type = "STRONG_GREEN"
-                elif close > ma20 and today_r >= 0.5 and drop10 <= 1:
+                elif close > ma20 and today_r <= 0.5 and today_r >= 0.0 and drop10 <= 5:
                     env_type = "GREEN"
-                elif close > ma20 and today_r >= 0 and drop10 <= 1:
+                elif today_r >= -0.5 and today_r <= 0.0 and drop10 <= 6:
                     env_type = "STRONG_YELLOW"
                 else:
                     env_type = "YELLOW"
