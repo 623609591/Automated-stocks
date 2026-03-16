@@ -408,9 +408,13 @@ def get_stock_data(ContextInfo, code):
                     vol_ratio = vol_per_min_today / avg_per_min_past5 if avg_per_min_past5 > 0 else 1.0
         detail = ContextInfo.get_instrumentdetail(code)
         if detail and isinstance(detail, dict):
+            # 流通股本（股）
             float_vol = detail.get('FloatVolumn') or detail.get('FloatVolume') or 0
-            if float_vol and close:
-                float_mktcap = float(float_vol) * float(close)
+            # 总股本（股），字段名按 QMT 常见写法做兼容，若不存在则回退用流通股本
+            total_vol = detail.get('TotalVolumn') or detail.get('TotalVolume') or float_vol
+            if total_vol and close:
+                # 总市值 = 总股本 × 最新价
+                float_mktcap = float(total_vol) * float(close)
             # API 无换手率时用 成交量/流通股 计算（与实盘显示一致）
             # 注意：get_market_data_ex 的 volume 单位是「手」(1手=100股)，流通股单位是「股」，需先换算
             if turn_percent == 0 and float_vol and vol:
@@ -1035,6 +1039,60 @@ def get_market_sentiment(ContextInfo):
     if avg_change <= -1.0:
         return "情绪冰点", avg_change
     return "情绪正常", avg_change
+import requests
+import datetime
+
+# ===================== 推送 =====================
+def send_wechat_msg(title, content=""):
+    """固定时间推送到微信（手机立刻震动提醒）"""
+    sendkey = "SCT323840TWxUXSzQPotJgPBP7rCn0V4xs"
+    url = f"https://sctapi.ftqq.com/{sendkey}.send"
+    data = {
+        "title": title,
+        "desp": content
+    }
+    try:
+        requests.post(url, data=data, timeout=3)
+    except:
+        pass
+
+
+def _send_wechat_position_snapshot(ContextInfo, label):
+    """生成当前持仓+收益摘要并发送微信"""
+    try:
+        state = _build_dashboard_state(ContextInfo)
+        account = state.get("account", {}) if isinstance(state, dict) else {}
+        holdings = state.get("holdings", []) if isinstance(state, dict) else []
+        total_asset = account.get("totalAsset", 0)
+        available = account.get("available", 0)
+        today_pnl = account.get("todayPnl", 0)
+        today_ratio = account.get("todayPnlRatio", 0)
+        lines = []
+        lines.append("账户概况：")
+        lines.append("总资产：%.2f，可用：%.2f，当日盈亏：%.2f（%.2f%%）" % (total_asset, available, today_pnl, today_ratio))
+        lines.append("")
+        lines.append("当前持仓：")
+        if not holdings:
+            lines.append("无持仓")
+        else:
+            for h in holdings:
+                lines.append(
+                    "%s %s 数量:%s 成本:%.2f 现价:%.2f 盈亏:%.2f%%"
+                    % (
+                        h.get("code", ""),
+                        h.get("name", ""),
+                        h.get("volume", 0),
+                        float(h.get("costPrice", 0) or 0),
+                        float(h.get("currentPrice", 0) or 0),
+                        float(h.get("pnlRatio", 0) or 0),
+                    )
+                )
+        content = "\n".join(lines)
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        title = "%s 持仓&收益快照 %s" % (label, now_str)
+        send_wechat_msg(title, content)
+    except Exception as e:
+        _qmt_log(ContextInfo, "发送微信持仓快照失败：%s" % str(e))
 
 
 # ===================== 初始化函数 =====================
@@ -1058,6 +1116,18 @@ def handlebar(ContextInfo):
     current_hour = now.hour
     current_minute = now.minute
     current_second = now.second
+    # 每天 10:40 推送一次
+    if current_hour == 10 and current_minute == 40 and 0 <= current_second <= 20:
+        today = now.date()
+        if getattr(ContextInfo, "_wechat_1040_date", None) != today:
+            ContextInfo._wechat_1040_date = today
+            _send_wechat_position_snapshot(ContextInfo, "10:40")
+    # 每天下午 15:00 推送一次
+    if current_hour == 15 and current_minute == 0 and 0 <= current_second <= 20:
+        today = now.date()
+        if getattr(ContextInfo, "_wechat_1500_date", None) != today:
+            ContextInfo._wechat_1500_date = today
+            _send_wechat_position_snapshot(ContextInfo, "15:00")
     # 买入窗口内每次到点都调用 buy_stocks，以便每次都能执行「当日亏2%强制清仓」检查；是否实际买入由内部 _buy_done_date 控制
     if current_hour == BUY_HOUR and BUY_MINUTE <= current_minute <= BUY_MINUTE + 2:
         if 0 <= current_second <= 15:
