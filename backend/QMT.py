@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """适配国金QMT极速策略交易系统 Python API（Python3）"""
 from datetime import datetime, timedelta, date
+import requests
 import pandas as pd
 import warnings
 import time
@@ -1039,8 +1040,6 @@ def get_market_sentiment(ContextInfo):
     if avg_change <= -1.0:
         return "情绪冰点", avg_change
     return "情绪正常", avg_change
-import requests
-import datetime
 
 # ===================== 推送 =====================
 def send_wechat_msg(title, content=""):
