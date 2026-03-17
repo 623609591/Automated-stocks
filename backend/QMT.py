@@ -358,24 +358,25 @@ def get_stock_data(ContextInfo, code):
             elif code.startswith(('0', '3')):
                 code = code + '.SZ'
         fields_quote = ['close', 'open', 'high', 'low', 'volume', 'amount', 'turnover']
-        quote = _qmt_get_market_data(ContextInfo, fields_quote, [code], period='1d', count=1)
+        quote = ContextInfo.get_full_tick([code])
         kline = _qmt_get_market_data(ContextInfo, ['close', 'volume', 'high', 'low'], [code], period='1d', count=20)
         if code not in quote or code not in kline or len(kline[code]['close']) < 20:
             klen = len(kline.get(code, {}).get('close', [])) if code in kline else 0
             _qmt_log(ContextInfo, "⚠️ get_stock_data 无数据: %s (在quote=%s 在kline=%s K线根数=%s，需≥20)" % (code, code in quote, code in kline, klen))
             return None
         q = quote[code]
-        close = q['close'][0] if q['close'] else 0
-        open_ = q['open'][0] if q.get('open') and q['open'] else close
-        amount_ = q['amount'][0] if q.get('amount') and q['amount'] else 0
+        # 如果 tick 没有拿到最新价，则回退到日线 close
+        close = q["lastPrice"] if q.get("lastPrice") and q["lastPrice"] else last_price
+        open_ = q['open'] if q.get('open') and q['open'] else close
+        amount_ = q['amount'] if q.get('amount') and q['amount'] else 0
         pre_close = kline[code]['close'][-2] if len(kline[code]['close']) >= 2 else close
         vol_ratio = 1.0
         # 换手率：get_market_data_ex 的 K 线常无 turnover 字段，先尝试 API，否则用 成交量/流通股 计算
-        vol = float(q['volume'][0]) if (q.get('volume') and q['volume']) else 0.0
+        vol = float(q['volume']) if (q.get('volume') and q['volume']) else 0.0
         turnover_raw = 0.0
         if q.get('turnover') and q['turnover']:
             try:
-                v = float(q['turnover'][0])
+                v = float(q['turnover'])
                 # API 可能为小数（0.05=5%）或已是百分数（5 表示 5%）
                 turnover_raw = v if v > 1 else v * 100.0
             except (TypeError, IndexError):
