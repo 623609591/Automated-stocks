@@ -25,7 +25,7 @@ export default function MarketSentiment({ data }) {
       <div className="env-stats">
         <div className="env-row">
           <span className="label">昨日涨停股今日平均涨跌</span>
-          <span className={avgChange != null ? (avgChange >= 0 ? 'text-green' : 'text-red') : ''}>
+          <span className={avgChange != null ? (avgChange >= 0 ? 'text-red' : 'text-green') : ''}>
             {avgChange != null ? `${avgChange >= 0 ? '+' : ''}${avgChange}%` : '-'}
           </span>
         </div>

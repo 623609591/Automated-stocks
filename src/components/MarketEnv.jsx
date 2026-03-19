@@ -36,7 +36,7 @@ export default function MarketEnv({ data }) {
         </div>
         <div className="env-row">
           <span className="label">今日涨跌幅</span>
-          <span className={shTodayReturn != null ? (shTodayReturn >= 0 ? 'text-green' : 'text-red') : ''}>
+          <span className={shTodayReturn != null ? (shTodayReturn >= 0 ? 'text-red' : 'text-green') : ''}>
             {shTodayReturn != null ? `${shTodayReturn >= 0 ? '+' : ''}${shTodayReturn.toFixed(2)}%` : '-'}
           </span>
         </div>

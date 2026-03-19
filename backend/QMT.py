@@ -51,6 +51,9 @@ BUY_HOUR, BUY_MINUTE = 14, 55    # 14:55-14:57买入
 SELL_START_HOUR, SELL_START_MIN = 9, 30  # 9:30开始卖出
 SELL_END_HOUR, SELL_END_MIN = 10, 30     # 10:30前必须卖完
 
+# 进程级“当日已买入”标记：防止策略多实例/多标的同时触发导致重复下单
+_GLOBAL_BUY_DONE_DATE = None
+
 # 监控大屏状态文件路径（QMT 策略运行时写入，后端 FastAPI 读取）
 # QMT 下无 __file__ 且子进程可能拿不到 bat 的环境变量，这里直接写死你项目的路径，保证能写出文件
 import os as _os
@@ -598,6 +601,10 @@ def sell_stock(ContextInfo, code, volume, price):
 # ===================== 买入执行（QMT：buy_stocks） =====================
 def buy_stocks(ContextInfo):
     today = datetime.now().date()
+    global _GLOBAL_BUY_DONE_DATE
+    # 若同一进程内已在当日完成过买入，则直接返回（防止多实例/多标的重复触发 14:55-14:57 买入窗口）
+    if _GLOBAL_BUY_DONE_DATE == today:
+        return
     #获取账户信息
     account = get_account_info(ContextInfo)
     #获取账户总资产和今日盈亏
@@ -658,7 +665,8 @@ def buy_stocks(ContextInfo):
             continue
         if buy_stock(ContextInfo, code, volume, price):
             ContextInfo.HOLD_CODES[code] = {'cost': price, 'volume': volume}
-    ContextInfo._buy_done_date = today  # 已执行买入，避免当日重复下单
+    ContextInfo._buy_done_date = today  # 已执行买入，避免当日重复下单（单实例）
+    _GLOBAL_BUY_DONE_DATE = today       # 已执行买入，避免当日重复下单（多实例）
 
 # ===================== 卖出执行（QMT：sell_stocks） =====================
 def sell_stocks(ContextInfo):

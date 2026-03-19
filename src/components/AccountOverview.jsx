@@ -4,7 +4,7 @@ import './Card.css'
 export default function AccountOverview({ data }) {
   if (!data) return null
   const { totalAsset, available, todayPnl, todayPnlRatio, dailyLossLimitHit } = data
-  const pnlClass = todayPnl >= 0 ? 'text-green' : 'text-red'
+  const pnlClass = todayPnl >= 0 ? 'text-red' : 'text-green'
   return (
     <div className="card">
       <h3 className="card-title">账户总览</h3>
@@ -20,7 +20,7 @@ export default function AccountOverview({ data }) {
         <div className="stat-item">
           <span className="label">当日盈亏</span>
           <span className={`stat-value ${pnlClass}`}>
-            ¥ {(todayPnl || 0).toLocaleString()} ({(todayPnlRatio != null ? (todayPnlRatio * 100).toFixed(2) : '0')}%)
+            ¥ {(todayPnl || 0).toLocaleString()} ({(todayPnlRatio != null ? Number(todayPnlRatio).toFixed(2) : '0')}%)
           </span>
         </div>
       </div>
