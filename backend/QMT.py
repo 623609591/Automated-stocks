@@ -362,8 +362,8 @@ def get_stock_data(ContextInfo, code):
                 code = code + '.SZ'
         fields_quote = ['close', 'open', 'high', 'low', 'volume', 'amount', 'turnover']
         quote = ContextInfo.get_full_tick([code])
-        kline = _qmt_get_market_data(ContextInfo, ['close', 'volume', 'high', 'low'], [code], period='1d', count=20)
-        if code not in quote or code not in kline or len(kline[code]['close']) < 20:
+        kline = _qmt_get_market_data(ContextInfo, ['close', 'volume', 'high', 'low'], [code], period='1d', count=21)
+        if code not in quote or code not in kline or len(kline[code]['close']) < 21:
             klen = len(kline.get(code, {}).get('close', [])) if code in kline else 0
             _qmt_log(ContextInfo, "⚠️ get_stock_data 无数据: %s (在quote=%s 在kline=%s K线根数=%s，需≥20)" % (code, code in quote, code in kline, klen))
             return None
