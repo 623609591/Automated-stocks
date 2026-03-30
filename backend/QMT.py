@@ -243,7 +243,7 @@ def get_env(ContextInfo):
     sh = "000001.SH"
     try:
         k_data = _qmt_get_market_data(ContextInfo, ['close'], [sh], period='1d', count=21)
-        if not k_data or sh not in k_data or len(k_data[sh]['close']) < 21:
+        if not k_data or sh not in k_data or len(k_data[sh]['close']) < 20:
             env_type = "YELLOW"
         else:
             close_list = k_data[sh]['close'][-21:]
@@ -363,7 +363,7 @@ def get_stock_data(ContextInfo, code):
         fields_quote = ['close', 'open', 'high', 'low', 'volume', 'amount', 'turnover']
         quote = ContextInfo.get_full_tick([code])
         kline = _qmt_get_market_data(ContextInfo, ['close', 'volume', 'high', 'low'], [code], period='1d', count=21)
-        if code not in quote or code not in kline or len(kline[code]['close']) < 21:
+        if code not in quote or code not in kline or len(kline[code]['close']) < 20:
             klen = len(kline.get(code, {}).get('close', [])) if code in kline else 0
             _qmt_log(ContextInfo, "⚠️ get_stock_data 无数据: %s (在quote=%s 在kline=%s K线根数=%s，需≥20)" % (code, code in quote, code in kline, klen))
             return None
@@ -790,7 +790,7 @@ def _get_market_env_detail(ContextInfo):
     sh = "000001.SH"
     try:
         k_data = _qmt_get_market_data(ContextInfo, ['close'], [sh], period='1d', count=21)
-        if not k_data or sh not in k_data or len(k_data[sh]['close']) < 21:
+        if not k_data or sh not in k_data or len(k_data[sh]['close']) < 20:
             return {"signal": "YELLOW", "shIndex": 0, "shMa20": 0, "shTodayReturn": 0, "dropDaysIn10": 0}
         close_list = k_data[sh]['close'][-21:]
         k_df = pd.DataFrame({'close': close_list})
