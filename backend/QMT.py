@@ -465,7 +465,7 @@ def get_stock_data(ContextInfo, code):
             'atr14': atr14,
             'ma5': sum(close_list[-5:]) / 5,
             'ma10': sum(close_list[-10:]) / 10,
-            'ma20': sum(close_list) / 20,
+            'ma20': sum(close_list[-20:]) / 20,
             'pre': pre_close,
             'name': name
         }
